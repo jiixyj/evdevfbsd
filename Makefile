@@ -2,6 +2,6 @@ PROG=	evdevfbsd
 MAN=
 
 LDADD=		-lcuse
-CFLAGS+=	-Iinclude
+CFLAGS+=	-Wall -Wextra -Iinclude -pthread
 
 .include <bsd.prog.mk>
