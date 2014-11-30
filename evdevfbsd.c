@@ -1,11 +1,13 @@
 #include <sys/param.h>
 
 #include <stdio.h>
+#include <stdbool.h>
 #include <string.h>
 
 #include <cuse.h>
 #include <err.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <unistd.h>
 
 #include "linux/input.h"
@@ -18,6 +20,7 @@ struct event_device {
   pthread_mutex_t event_buffer_mutex;
   pthread_cond_t event_buffer_cond;
   pthread_t fill_thread;
+  bool reader_present;
 };
 
 int event_device_nr_free_buffer(struct event_device* ed) {
@@ -35,17 +38,32 @@ int event_device_nr_inside_buffer(struct event_device* ed) {
 
 int evdevfbsd_open(struct cuse_dev *cdev, int fflags) {
   puts("device opened");
+  struct event_device* ed = cuse_dev_get_priv0(cdev);
+
+  pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
+  ed->event_buffer_start = 0;
+  ed->event_buffer_end = 0;
+  ed->reader_present = true;
+  pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
   return CUSE_ERR_NONE;
 }
 
 int evdevfbsd_close(struct cuse_dev *cdev, int fflags) {
   puts("device closed");
+  struct event_device* ed = cuse_dev_get_priv0(cdev);
+
+  pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
+  ed->reader_present = false;
+  pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
   return CUSE_ERR_NONE;
 }
 
 int evdevfbsd_read(struct cuse_dev *cdev, int fflags, void *user_ptr,
                    int len) {
   printf("device read %d\n", fflags);
+
+  if (len < sizeof(struct input_event))
+    return CUSE_ERR_INVALID;
 
   int requested_events = len / sizeof(struct input_event);
   int nr_events;
@@ -66,14 +84,20 @@ do_copy_out:
   } else if (fflags & CUSE_FFLAG_NONBLOCK) {
     ret = CUSE_ERR_WOULDBLOCK;
   } else {
-    puts("waiting on cond");
+    printf("%d: waiting on cond\n", pthread_getthreadid_np());
     pthread_cond_wait(&ed->event_buffer_cond, &ed->event_buffer_mutex); // XXX
+    if (cuse_got_peer_signal() == 0) {
+      pthread_mutex_unlock(&ed->event_buffer_mutex);
+      return CUSE_ERR_SIGNAL;
+    }
+    printf("%d: cond done\n", pthread_getthreadid_np());
     goto do_copy_out;
   }
   pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
 
   return ret == 0 ? nr_events * sizeof(struct input_event) : ret;
 }
+
 
 int evdevfbsd_poll(struct cuse_dev *cdev, int fflags, int events) {
   if (!(events & CUSE_POLL_READ))
@@ -95,11 +119,13 @@ struct cuse_methods evdevfbsd_methods = {.cm_open = evdevfbsd_open,
                                          .cm_read = evdevfbsd_read,
                                          .cm_poll = evdevfbsd_poll};
 
+
 int event_device_init(struct event_device* ed) {
   ed->fd = -1;
   memset(&ed->event_buffer, 0, sizeof(ed->event_buffer));
   ed->event_buffer_start = 0;
   ed->event_buffer_end = 0;
+  ed->reader_present = false;
   return pthread_mutex_init(&ed->event_buffer_mutex, NULL) ||
          pthread_cond_init(&ed->event_buffer_cond, NULL);
 }
@@ -118,7 +144,7 @@ void* dummy_fill_function(struct event_device *ed) {
   for (;;) {
     pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
 
-    if (event_device_nr_free_buffer(ed) >= 3) {
+    if (ed->reader_present && event_device_nr_free_buffer(ed) >= 3) {
       puts("putting events...");
 
       struct timeval tv;
@@ -158,13 +184,21 @@ void* dummy_fill_function(struct event_device *ed) {
   return NULL;
 }
 
+void evdevfbsd_hup_catcher(int dummy) {
+  printf("%d: HUP received\n", pthread_getthreadid_np());
+}
+
 void *wait_and_proc(void *notused) {
   int ret;
+
+  signal(SIGHUP, evdevfbsd_hup_catcher);
+
   for (;;) {
     ret = cuse_wait_and_process();
     if (ret < 0)
-      warnx("cuse_wait_and_process returned %d\n", ret);
+      break;
   }
+  return NULL;
 }
 
 int main() {
@@ -178,7 +212,6 @@ int main() {
   struct event_device ed;
   event_device_init(&ed); // XXX
   event_device_open(&ed, NULL, dummy_fill_function); // XXX
-
 
   struct cuse_dev *evdevfbsddev = cuse_dev_create(
       &evdevfbsd_methods, &ed, NULL, 0, 0, 0444, "input/event0");
