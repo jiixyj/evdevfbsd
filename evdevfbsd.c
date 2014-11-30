@@ -45,7 +45,7 @@ int evdevfbsd_close(struct cuse_dev *cdev, int fflags) {
 
 int evdevfbsd_read(struct cuse_dev *cdev, int fflags, void *user_ptr,
                    int len) {
-  puts("device read");
+  printf("device read %d\n", fflags);
 
   int requested_events = len / sizeof(struct input_event);
   int nr_events;
@@ -63,6 +63,8 @@ do_copy_out:
                         nr_events * sizeof(struct input_event));
     if (ret == 0)
       ed->event_buffer_start += nr_events;
+  } else if (fflags & CUSE_FFLAG_NONBLOCK) {
+    ret = CUSE_ERR_WOULDBLOCK;
   } else {
     puts("waiting on cond");
     pthread_cond_wait(&ed->event_buffer_cond, &ed->event_buffer_mutex); // XXX
@@ -73,10 +75,25 @@ do_copy_out:
   return ret == 0 ? nr_events * sizeof(struct input_event) : ret;
 }
 
+int evdevfbsd_poll(struct cuse_dev *cdev, int fflags, int events) {
+  if (!(events & CUSE_POLL_READ))
+    return CUSE_POLL_NONE;
+
+  int ret = CUSE_POLL_NONE;
+  struct event_device* ed = cuse_dev_get_priv0(cdev);
+
+  pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
+  if (event_device_nr_inside_buffer(ed) > 0)
+    ret = CUSE_POLL_READ;
+  pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
+
+  return ret;
+}
+
 struct cuse_methods evdevfbsd_methods = {.cm_open = evdevfbsd_open,
                                          .cm_close = evdevfbsd_close,
-                                         .cm_read = evdevfbsd_read};
-
+                                         .cm_read = evdevfbsd_read,
+                                         .cm_poll = evdevfbsd_poll};
 
 int event_device_init(struct event_device* ed) {
   ed->fd = -1;
@@ -129,6 +146,7 @@ void* dummy_fill_function(struct event_device *ed) {
       buf->value = 0;
       ++ed->event_buffer_end;
 
+      cuse_poll_wakeup();
       pthread_cond_broadcast(&ed->event_buffer_cond);
     }
 
@@ -167,10 +185,11 @@ int main() {
   if (!evdevfbsddev)
     errx(1, "cuse_dev_create failed");
 
-  pthread_t worker1, worker2;
-  pthread_create(&worker1, NULL, wait_and_proc, NULL);
-  pthread_create(&worker2, NULL, wait_and_proc, NULL);
 
-  pthread_join(worker2, NULL);
-  pthread_join(worker1, NULL);
+  pthread_t worker1, worker2;
+  pthread_create(&worker1, NULL, wait_and_proc, NULL); // XXX
+  pthread_create(&worker2, NULL, wait_and_proc, NULL); // XXX
+
+  pthread_join(worker2, NULL); // XXX
+  pthread_join(worker1, NULL); // XXX
 }
