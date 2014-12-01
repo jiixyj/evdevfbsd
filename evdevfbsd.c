@@ -126,11 +126,89 @@ int evdevfbsd_poll(struct cuse_dev *cdev, int fflags, int events) {
   return ret;
 }
 
+void set_bit(uint64_t *array, int bit) {
+  array[bit / 64] |= (1LL << (bit % 64));
+}
+
+int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
+                    void *peer_data) {
+  uint64_t bits[256];
+
+  switch (cmd) {
+    case EVIOCGID: {
+      printf("got ioctl EVIOCGID\n");
+      struct input_id iid = {0};
+      iid.bustype = BUS_VIRTUAL;
+      return cuse_copy_out(&iid, peer_data, sizeof(iid));
+    }
+    case EVIOCGVERSION: {
+      printf("got ioctl EVIOCGVERSION\n");
+      int version = EV_VERSION;
+      return cuse_copy_out(&version, peer_data, sizeof(version));
+    }
+  }
+
+  int base_cmd = IOCBASECMD(cmd);
+  int len = IOCPARM_LEN(cmd);
+
+  switch (base_cmd) {
+    case EVIOCGBIT(0, 0): {
+      printf("got ioctl EVIOCGBIT %d\n", len);
+      memset(bits, 0, sizeof(bits));
+      set_bit(bits, EV_KEY);
+      set_bit(bits, EV_REL);
+      return cuse_copy_out(bits, peer_data, MIN((int)sizeof(bits), len));
+    }
+    case EVIOCGNAME(0): {
+      printf("got ioctl EVIOCGNAME %d\n", len);
+      const char* name = "testmouse";
+      return cuse_copy_out(name, peer_data, MIN((int)strlen(name), len));
+    }
+    case EVIOCGPHYS(0):
+      printf("got ioctl EVIOCGPHYS %d\n", len);
+      // ENOENT would be better, but that is not supported by cuse
+      return 0;
+    case EVIOCGUNIQ(0):
+      printf("got ioctl EVIOCGUNIQ %d\n", len);
+      // ENOENT would be better, but that is not supported by cuse
+      return 0;
+    case EVIOCGBIT(EV_REL, 0): {
+      printf("got ioctl EVIOCGBIT %d\n", len);
+      memset(bits, 0, sizeof(bits));
+      set_bit(bits, REL_X);
+      set_bit(bits, REL_Y);
+      return cuse_copy_out(bits, peer_data, MIN((int)sizeof(bits), len));
+    }
+    case EVIOCGBIT(EV_ABS, 0):
+    case EVIOCGBIT(EV_LED, 0):
+    case EVIOCGBIT(EV_KEY, 0):
+    case EVIOCGBIT(EV_SW, 0):
+    case EVIOCGBIT(EV_MSC, 0):
+    case EVIOCGBIT(EV_FF, 0):
+    case EVIOCGBIT(EV_SND, 0):
+      printf("got ioctl EVIOCGBIT %d\n", len);
+      memset(bits, 0, sizeof(bits));
+      return cuse_copy_out(bits, peer_data, MIN((int)sizeof(bits), len));
+    case EVIOCGKEY(0):
+      printf("got ioctl EVIOCGKEY %d\n", len);
+      return 0;
+    case EVIOCGLED(0):
+      printf("got ioctl EVIOCGLED %d\n", len);
+      return 0;
+    case EVIOCGSW(0):
+      printf("got ioctl EVIOCGSW %d\n", len);
+      return 0;
+  }
+
+  printf("got ioctl %lu\n", cmd);
+  return CUSE_ERR_INVALID;
+}
+
 struct cuse_methods evdevfbsd_methods = {.cm_open = evdevfbsd_open,
                                          .cm_close = evdevfbsd_close,
                                          .cm_read = evdevfbsd_read,
-                                         .cm_poll = evdevfbsd_poll};
-
+                                         .cm_poll = evdevfbsd_poll,
+                                         .cm_ioctl = evdevfbsd_ioctl};
 
 int event_device_init(struct event_device* ed) {
   ed->fd = -1;

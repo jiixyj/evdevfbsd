@@ -18,6 +18,7 @@
 #define __u32 uint32_t
 #define __s16 int16_t
 #define __s32 int32_t
+#define _IOC_READ IOC_OUT
 #else
 #include <linux/types.h>
 #endif
