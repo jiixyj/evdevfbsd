@@ -1,3 +1,4 @@
+#include <sys/mouse.h>
 #include <sys/param.h>
 
 #include <signal.h>
@@ -7,6 +8,7 @@
 
 #include <cuse.h>
 #include <err.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <semaphore.h>
 #include <unistd.h>
@@ -177,11 +179,20 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
       memset(bits, 0, sizeof(bits));
       set_bit(bits, REL_X);
       set_bit(bits, REL_Y);
+      set_bit(bits, REL_WHEEL);
+      set_bit(bits, REL_HWHEEL);
       return cuse_copy_out(bits, peer_data, MIN((int)sizeof(bits), len));
     }
     case EVIOCGBIT(EV_ABS, 0):
     case EVIOCGBIT(EV_LED, 0):
-    case EVIOCGBIT(EV_KEY, 0):
+    case EVIOCGBIT(EV_KEY, 0): {
+      printf("got ioctl EVIOCGBIT %d\n", len);
+      memset(bits, 0, sizeof(bits));
+      set_bit(bits, BTN_LEFT);
+      set_bit(bits, BTN_MIDDLE);
+      set_bit(bits, BTN_RIGHT);
+      return cuse_copy_out(bits, peer_data, MIN((int)sizeof(bits), len));
+    }
     case EVIOCGBIT(EV_SW, 0):
     case EVIOCGBIT(EV_MSC, 0):
     case EVIOCGBIT(EV_FF, 0):
@@ -228,7 +239,128 @@ int event_device_open(struct event_device *ed, char const *path,
                         (void *(*)(void *))fill_function, ed);
 }
 
-#if 1
+void* sysmouse_fill_function(struct event_device *ed) {
+  unsigned char packet[19];
+  int fd = open("/dev/sysmouse", O_RDONLY);
+  if (fd == -1)
+    err(1, "open /dev/sysmouse failed");
+
+  {
+    int level = 2;
+    if (ioctl(fd, MOUSE_SETLEVEL, &level) == -1)
+      err(1, "ioctl MOUSE_SETLEVEL failed");
+  }
+
+  int obuttons = 0;
+
+  while (read(fd, packet, sizeof(packet)) == sizeof(packet)) {
+    pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
+    if (!ed->has_reader) {
+      obuttons = 0;
+      pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
+      continue;
+    }
+
+    if (event_device_nr_free_buffer(ed) >= 8) {
+      puts("putting events...");
+      int buttons, dx, dy, dz, dw;
+
+      buttons = (~packet[0]) & 0x07;
+      dx = (int16_t)((packet[8] << 9) | (packet[9] << 2)) >> 2;
+      dy = -((int16_t)((packet[10] << 9) | (packet[11] << 2)) >> 2);
+      dz = (int16_t)((packet[12] << 9) | (packet[13] << 2)) >> 2;
+      dw = (int16_t)((packet[14] << 9) | (packet[15] << 2)) >> 2;
+
+      struct timeval tv;
+      gettimeofday(&tv, NULL); // XXX
+      struct input_event *buf;
+
+      if ((buttons ^ obuttons) & MOUSE_SYS_BUTTON1UP) {
+        buf = &ed->event_buffer[ed->event_buffer_end];
+        buf->time = tv;
+        buf->type = EV_KEY;
+        buf->code = BTN_LEFT;
+        buf->value = (buttons & MOUSE_SYS_BUTTON1UP) ? 1 : 0;
+        ++ed->event_buffer_end;
+        sem_post(&ed->event_buffer_sem);
+      }
+
+      if ((buttons ^ obuttons) & MOUSE_SYS_BUTTON2UP) {
+        buf = &ed->event_buffer[ed->event_buffer_end];
+        buf->time = tv;
+        buf->type = EV_KEY;
+        buf->code = BTN_MIDDLE;
+        buf->value = (buttons & MOUSE_SYS_BUTTON2UP) ? 1 : 0;
+        ++ed->event_buffer_end;
+        sem_post(&ed->event_buffer_sem);
+      }
+
+      if ((buttons ^ obuttons) & MOUSE_SYS_BUTTON3UP) {
+        buf = &ed->event_buffer[ed->event_buffer_end];
+        buf->time = tv;
+        buf->type = EV_KEY;
+        buf->code = BTN_RIGHT;
+        buf->value = (buttons & MOUSE_SYS_BUTTON3UP) ? 1 : 0;
+        ++ed->event_buffer_end;
+        sem_post(&ed->event_buffer_sem);
+      }
+
+      if (dx) {
+        buf = &ed->event_buffer[ed->event_buffer_end];
+        buf->time = tv;
+        buf->type = EV_REL;
+        buf->code = REL_X;
+        buf->value = dx;
+        ++ed->event_buffer_end;
+        sem_post(&ed->event_buffer_sem);
+      }
+      if (dy) {
+        buf = &ed->event_buffer[ed->event_buffer_end];
+        buf->time = tv;
+        buf->type = EV_REL;
+        buf->code = REL_Y;
+        buf->value = dy;
+        ++ed->event_buffer_end;
+        sem_post(&ed->event_buffer_sem);
+      }
+      if (dz) {
+        buf = &ed->event_buffer[ed->event_buffer_end];
+        buf->time = tv;
+        buf->type = EV_REL;
+        buf->code = REL_WHEEL;
+        buf->value = dz;
+        ++ed->event_buffer_end;
+        sem_post(&ed->event_buffer_sem);
+      }
+      if (dw) {
+        buf = &ed->event_buffer[ed->event_buffer_end];
+        buf->time = tv;
+        buf->type = EV_REL;
+        buf->code = REL_HWHEEL;
+        buf->value = dw;
+        ++ed->event_buffer_end;
+        sem_post(&ed->event_buffer_sem);
+      }
+
+      buf = &ed->event_buffer[ed->event_buffer_end];
+      buf->time = tv;
+      buf->type = EV_SYN;
+      buf->code = SYN_REPORT;
+      buf->value = 0;
+      ++ed->event_buffer_end;
+      sem_post(&ed->event_buffer_sem);
+
+      cuse_poll_wakeup();
+
+      obuttons = buttons;
+    }
+
+    pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
+  }
+
+  return NULL;
+}
+
 void* dummy_fill_function(struct event_device *ed) {
   for (;;) {
     pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
@@ -274,7 +406,6 @@ void* dummy_fill_function(struct event_device *ed) {
 
   return NULL;
 }
-#endif
 
 void evdevfbsd_hup_catcher(int dummy) {
   puts("SIGHUP");
@@ -306,7 +437,7 @@ int main() {
 
   struct event_device ed;
   event_device_init(&ed); // XXX
-  event_device_open(&ed, NULL, dummy_fill_function); // XXX
+  event_device_open(&ed, NULL, sysmouse_fill_function); // XXX
 
   struct cuse_dev *evdevfbsddev = cuse_dev_create(
       &evdevfbsd_methods, &ed, NULL, 0, 0, 0444, "input/event0");
