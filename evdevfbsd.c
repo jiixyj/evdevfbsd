@@ -32,7 +32,7 @@ int event_device_nr_free_buffer(struct event_device* ed) {
 }
 
 int evdevfbsd_open(struct cuse_dev *cdev, int fflags) {
-  puts("device opened");
+  // puts("device opened");
   struct event_device *ed = cuse_dev_get_priv0(cdev);
 
   int ret = CUSE_ERR_NONE;
@@ -48,7 +48,7 @@ int evdevfbsd_open(struct cuse_dev *cdev, int fflags) {
 }
 
 int evdevfbsd_close(struct cuse_dev *cdev, int fflags) {
-  puts("device closed");
+  // puts("device closed");
   struct event_device *ed = cuse_dev_get_priv0(cdev);
 
   pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
@@ -62,8 +62,6 @@ int evdevfbsd_close(struct cuse_dev *cdev, int fflags) {
 
 int evdevfbsd_read(struct cuse_dev *cdev, int fflags, void *user_ptr,
                    int len) {
-  printf("device read %d\n", fflags);
-
   if (len < 0)
     return CUSE_ERR_INVALID;
 
@@ -78,9 +76,7 @@ int evdevfbsd_read(struct cuse_dev *cdev, int fflags, void *user_ptr,
 
 retry:
   if (!(fflags & CUSE_FFLAG_NONBLOCK)) {
-    puts("sem wait...");
     ret = sem_wait(&ed->event_buffer_sem);
-    puts("sem wait done!");
     if (ret == -1 && cuse_got_peer_signal() == 0)
       return CUSE_ERR_SIGNAL;
   }
@@ -96,7 +92,6 @@ retry:
     }
   } else {
     nr_events = MIN(requested_events, ed->event_buffer_end);
-    puts("copy out");
     ret = cuse_copy_out(ed->event_buffer, user_ptr,
                         nr_events * sizeof(struct input_event));
     if (ret == 0) {
@@ -138,13 +133,13 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
 
   switch (cmd) {
     case EVIOCGID: {
-      printf("got ioctl EVIOCGID\n");
+      // printf("got ioctl EVIOCGID\n");
       struct input_id iid = {0};
       iid.bustype = BUS_VIRTUAL;
       return cuse_copy_out(&iid, peer_data, sizeof(iid));
     }
     case EVIOCGVERSION: {
-      printf("got ioctl EVIOCGVERSION\n");
+      // printf("got ioctl EVIOCGVERSION\n");
       int version = EV_VERSION;
       return cuse_copy_out(&version, peer_data, sizeof(version));
     }
@@ -155,27 +150,27 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
 
   switch (base_cmd) {
     case EVIOCGBIT(0, 0): {
-      printf("got ioctl EVIOCGBIT %d\n", len);
+      // printf("got ioctl EVIOCGBIT %d\n", len);
       memset(bits, 0, sizeof(bits));
       set_bit(bits, EV_KEY);
       set_bit(bits, EV_REL);
       return cuse_copy_out(bits, peer_data, MIN((int)sizeof(bits), len));
     }
     case EVIOCGNAME(0): {
-      printf("got ioctl EVIOCGNAME %d\n", len);
+      // printf("got ioctl EVIOCGNAME %d\n", len);
       const char* name = "testmouse";
       return cuse_copy_out(name, peer_data, MIN((int)strlen(name), len));
     }
     case EVIOCGPHYS(0):
-      printf("got ioctl EVIOCGPHYS %d\n", len);
+      // printf("got ioctl EVIOCGPHYS %d\n", len);
       // ENOENT would be better, but that is not supported by cuse
       return 0;
     case EVIOCGUNIQ(0):
-      printf("got ioctl EVIOCGUNIQ %d\n", len);
+      // printf("got ioctl EVIOCGUNIQ %d\n", len);
       // ENOENT would be better, but that is not supported by cuse
       return 0;
     case EVIOCGBIT(EV_REL, 0): {
-      printf("got ioctl EVIOCGBIT %d\n", len);
+      // printf("got ioctl EVIOCGBIT %d\n", len);
       memset(bits, 0, sizeof(bits));
       set_bit(bits, REL_X);
       set_bit(bits, REL_Y);
@@ -186,7 +181,7 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
     case EVIOCGBIT(EV_ABS, 0):
     case EVIOCGBIT(EV_LED, 0):
     case EVIOCGBIT(EV_KEY, 0): {
-      printf("got ioctl EVIOCGBIT %d\n", len);
+      // printf("got ioctl EVIOCGBIT %d\n", len);
       memset(bits, 0, sizeof(bits));
       set_bit(bits, BTN_LEFT);
       set_bit(bits, BTN_MIDDLE);
@@ -197,17 +192,17 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
     case EVIOCGBIT(EV_MSC, 0):
     case EVIOCGBIT(EV_FF, 0):
     case EVIOCGBIT(EV_SND, 0):
-      printf("got ioctl EVIOCGBIT %d\n", len);
+      // printf("got ioctl EVIOCGBIT %d\n", len);
       memset(bits, 0, sizeof(bits));
       return cuse_copy_out(bits, peer_data, MIN((int)sizeof(bits), len));
     case EVIOCGKEY(0):
-      printf("got ioctl EVIOCGKEY %d\n", len);
+      // printf("got ioctl EVIOCGKEY %d\n", len);
       return 0;
     case EVIOCGLED(0):
-      printf("got ioctl EVIOCGLED %d\n", len);
+      // printf("got ioctl EVIOCGLED %d\n", len);
       return 0;
     case EVIOCGSW(0):
-      printf("got ioctl EVIOCGSW %d\n", len);
+      // printf("got ioctl EVIOCGSW %d\n", len);
       return 0;
   }
 
@@ -262,13 +257,12 @@ void* sysmouse_fill_function(struct event_device *ed) {
     }
 
     if (event_device_nr_free_buffer(ed) >= 8) {
-      puts("putting events...");
       int buttons, dx, dy, dz, dw;
 
       buttons = (~packet[0]) & 0x07;
       dx = (int16_t)((packet[8] << 9) | (packet[9] << 2)) >> 2;
       dy = -((int16_t)((packet[10] << 9) | (packet[11] << 2)) >> 2);
-      dz = (int16_t)((packet[12] << 9) | (packet[13] << 2)) >> 2;
+      dz = -((int16_t)((packet[12] << 9) | (packet[13] << 2)) >> 2);
       dw = (int16_t)((packet[14] << 9) | (packet[15] << 2)) >> 2;
 
       struct timeval tv;
@@ -366,8 +360,6 @@ void* dummy_fill_function(struct event_device *ed) {
     pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
 
     if (ed->has_reader && event_device_nr_free_buffer(ed) >= 3) {
-      puts("putting events...");
-
       struct timeval tv;
       gettimeofday(&tv, NULL); // XXX
       struct input_event *buf;
@@ -408,7 +400,7 @@ void* dummy_fill_function(struct event_device *ed) {
 }
 
 void evdevfbsd_hup_catcher(int dummy) {
-  puts("SIGHUP");
+  // puts("SIGHUP");
 }
 
 void *wait_and_proc(void *notused) {
@@ -428,7 +420,6 @@ void *wait_and_proc(void *notused) {
 }
 
 int main() {
-  printf("sizeof struct event: %d\n", (int) sizeof(struct input_event));
   int ret;
 
   if ((ret = cuse_init()) < 0)
