@@ -260,6 +260,8 @@ void put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
 struct psm_backend {
   int fd;
   mousehw_t hw_info;
+  int guest_dev_fd;
+  synapticshw_t synaptics_info;
 };
 
 void set_bits_generic_ps2(struct event_device *ed) {
@@ -293,11 +295,14 @@ int psm_backend_init(struct event_device *ed) {
 
   ed->iid.bustype = BUS_I8042;
   ed->iid.vendor = 0x02;
+  b->guest_dev_fd = -1;
 
   switch (b->hw_info.model) {
     case MOUSE_MODEL_SYNAPTICS:
       ed->device_name = "Synaptics";
       ed->iid.product = PSMOUSE_SYNAPTICS;
+      if (ioctl(b->fd, MOUSE_SYN_GETHWINFO, &b->synaptics_info) == -1)
+        goto fail;
       set_bits_generic_ps2(ed);
       break;
     case MOUSE_MODEL_TRACKPOINT:
@@ -318,6 +323,26 @@ fail:
   return 1;
 }
 
+int write_full_packet(int fd, unsigned char* pkt, size_t siz) {
+  ssize_t ret = write(fd, pkt, siz);
+  if (ret == -1 && errno == EAGAIN)
+    return 1;
+  if (ret == -1)
+    return -1;
+
+  pkt += ret;
+  siz -= ret;
+
+  while (siz) {
+    ret = write(fd, pkt, siz);
+    if (ret > 0) {
+      pkt += ret;
+      siz -= ret;
+    }
+  }
+  return 0;
+}
+
 void* psm_fill_function(struct event_device *ed) {
   struct psm_backend *b = ed->priv_ptr;
 
@@ -336,7 +361,7 @@ void* psm_fill_function(struct event_device *ed) {
 
   while (read_full_packet(b->fd, packet, packetsize) == 0) {
     pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
-    if (!ed->has_reader) {
+    if (!ed->has_reader && b->guest_dev_fd == -1) {
       obuttons = 0;
       pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
       continue;
@@ -352,14 +377,21 @@ void* psm_fill_function(struct event_device *ed) {
             packet[0] = packet[1];
             packet[1] = packet[4];
             packet[2] = packet[5];
-            goto generic_ps2_packet;
+            if (b->guest_dev_fd != -1) {
+              write_full_packet(b->guest_dev_fd, packet, 3);
+            }
+            break;
           }
+          if (!ed->has_reader)
+            break;
+          //
+          // TODO
+          //
           break;
         }
       }
       case MOUSE_MODEL_GENERIC:
       case MOUSE_MODEL_TRACKPOINT: {
-generic_ps2_packet:
         if (event_device_nr_free_buffer(ed) >= 6) {
           int buttons = (packet[0] & 0x07);
           int x = (packet[0] & (1 << 4)) ? packet[1] - 256 : packet[1];
@@ -517,6 +549,56 @@ int event_device_open(struct event_device *ed, char const *path) {
   return pthread_create(&ed->fill_thread, NULL, fill_function, ed);
 }
 
+int event_device_open_as_guest(struct event_device *ed,
+                               struct event_device *parent) {
+  ed->priv_ptr = malloc(sizeof(struct psm_backend));
+  if (!ed->priv_ptr)
+    return 1;
+
+  struct psm_backend *b = ed->priv_ptr;
+
+  int fds[2] = {-1, -1};
+  if (pipe(fds) == -1)
+    goto fail;
+
+  if (fcntl(fds[1], F_SETFL, O_NONBLOCK) == -1)
+    goto fail;
+
+  b->fd = fds[0];
+
+  b->hw_info.model = MOUSE_MODEL_TRACKPOINT;
+
+  ed->iid.bustype = BUS_I8042;
+  ed->iid.vendor = 0x02;
+  b->guest_dev_fd = -1;
+
+  switch (b->hw_info.model) {
+    case MOUSE_MODEL_TRACKPOINT:
+      ed->device_name = "TPPS/2 IBM TrackPoint";
+      ed->iid.product = PSMOUSE_TRACKPOINT;
+      set_bits_generic_ps2(ed);
+      break;
+  }
+
+  b = parent->priv_ptr;
+  pthread_mutex_lock(&parent->event_buffer_mutex); // XXX
+  b->guest_dev_fd = fds[1];
+  pthread_mutex_unlock(&parent->event_buffer_mutex); // XXX
+
+  if (pthread_create(&ed->fill_thread, NULL, psm_fill_function, ed) == 0)
+    return 0;
+
+fail:
+  if (fds[0] != -1) {
+    close(fds[0]);
+  }
+  if (fds[1] != -1) {
+    close(fds[1]);
+  }
+  free(ed->priv_ptr);
+  return 1;
+}
+
 int main() {
   int ret;
 
@@ -527,11 +609,23 @@ int main() {
   event_device_init(&ed); // XXX
   event_device_open(&ed, "/dev/bpsm0"); // XXX
 
-  struct cuse_dev *evdevfbsddev = cuse_dev_create(
-      &evdevfbsd_methods, &ed, NULL, 0, 0, 0444, "input/event0");
-  if (!evdevfbsddev)
-    errx(1, "cuse_dev_create failed");
+  struct event_device ed_guest;
+  event_device_init(&ed_guest); // XXX
+  event_device_open_as_guest(&ed_guest, &ed); // XXX
 
+  {
+    struct cuse_dev *evdevfbsddev = cuse_dev_create(
+        &evdevfbsd_methods, &ed, NULL, 0, 0, 0444, "input/event0");
+    if (!evdevfbsddev)
+      errx(1, "cuse_dev_create failed");
+  }
+
+  {
+    struct cuse_dev *evdevfbsddev = cuse_dev_create(
+        &evdevfbsd_methods, &ed_guest, NULL, 0, 0, 0444, "input/event1");
+    if (!evdevfbsddev)
+      errx(1, "cuse_dev_create failed");
+  }
 
   pthread_t worker[4];
   pthread_create(&worker[0], NULL, wait_and_proc, NULL); // XXX
