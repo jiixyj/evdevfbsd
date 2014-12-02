@@ -234,6 +234,138 @@ int event_device_open(struct event_device *ed, char const *path,
                         (void *(*)(void *))fill_function, ed);
 }
 
+
+#define PACKET_MAX 32
+
+struct mouse_state {
+  int model;
+  uint32_t buttons;
+};
+
+int read_full_packet(int fd, unsigned char *buf, size_t siz) {
+  ssize_t ret;
+  while (siz) {
+    ret = read(fd, buf, siz);
+    if (ret <= 0)
+      return 0;
+    siz -= ret;
+    buf += ret;
+  }
+  return 1;
+}
+
+void* psm_fill_function(struct event_device *ed) {
+  int fd = open("/dev/bpsm0", O_RDONLY);
+  if (fd == -1)
+    err(1, "open");
+
+  int level = 2;
+  if (ioctl(fd, MOUSE_SETLEVEL, &level) == -1)
+    err(1, "ioctl");
+
+  mousehw_t hw_info;
+  if (ioctl(fd, MOUSE_GETHWINFO, &hw_info) == -1)
+    err(1, "ioctl MOUSE_GETHWINFO");
+
+  fprintf(stderr, "mouse model: %d\n", hw_info.model);
+
+  size_t packetsize = MOUSE_PS2_PACKETSIZE;
+  switch (hw_info.model) {
+    case MOUSE_MODEL_TRACKPOINT:
+      packetsize = MOUSE_PS2_PACKETSIZE;
+      break;
+  }
+
+  int obuttons = 0;
+  unsigned char packet[PACKET_MAX];
+
+  while (read_full_packet(fd, packet, packetsize)) {
+    pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
+    if (!ed->has_reader) {
+      obuttons = 0;
+      pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
+      continue;
+    }
+
+    switch (hw_info.model) {
+      case MOUSE_MODEL_TRACKPOINT: {
+        if (event_device_nr_free_buffer(ed) >= 6) {
+          int buttons = (packet[0] & 0x07);
+          int x = (packet[0] & (1 << 4)) ? packet[1] - 256 : packet[1];
+          int y = (packet[0] & (1 << 5)) ? packet[2] - 256 : packet[2];
+          y = -y;
+
+          struct timeval tv;
+          gettimeofday(&tv, NULL); // XXX
+          struct input_event *buf;
+
+          if ((buttons ^ obuttons) & (1 << 0)) {
+            buf = &ed->event_buffer[ed->event_buffer_end];
+            buf->time = tv;
+            buf->type = EV_KEY;
+            buf->code = BTN_LEFT;
+            buf->value = !!(buttons & (1 << 0));
+            ++ed->event_buffer_end;
+            sem_post(&ed->event_buffer_sem);
+          }
+          if ((buttons ^ obuttons) & (1 << 1)) {
+            buf = &ed->event_buffer[ed->event_buffer_end];
+            buf->time = tv;
+            buf->type = EV_KEY;
+            buf->code = BTN_RIGHT;
+            buf->value = !!(buttons & (1 << 1));
+            ++ed->event_buffer_end;
+            sem_post(&ed->event_buffer_sem);
+          }
+          if ((buttons ^ obuttons) & (1 << 2)) {
+            buf = &ed->event_buffer[ed->event_buffer_end];
+            buf->time = tv;
+            buf->type = EV_KEY;
+            buf->code = BTN_MIDDLE;
+            buf->value = !!(buttons & (1 << 2));
+            ++ed->event_buffer_end;
+            sem_post(&ed->event_buffer_sem);
+          }
+
+          if (x) {
+            buf = &ed->event_buffer[ed->event_buffer_end];
+            buf->time = tv;
+            buf->type = EV_REL;
+            buf->code = REL_X;
+            buf->value = x;
+            ++ed->event_buffer_end;
+            sem_post(&ed->event_buffer_sem);
+          }
+          if (y) {
+            buf = &ed->event_buffer[ed->event_buffer_end];
+            buf->time = tv;
+            buf->type = EV_REL;
+            buf->code = REL_Y;
+            buf->value = y;
+            ++ed->event_buffer_end;
+            sem_post(&ed->event_buffer_sem);
+          }
+          buf = &ed->event_buffer[ed->event_buffer_end];
+          buf->time = tv;
+          buf->type = EV_SYN;
+          buf->code = SYN_REPORT;
+          buf->value = 0;
+          ++ed->event_buffer_end;
+          sem_post(&ed->event_buffer_sem);
+
+          cuse_poll_wakeup();
+
+          obuttons = buttons;
+        }
+      }
+    }
+
+    pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
+  }
+
+  return NULL;
+}
+
 void* sysmouse_fill_function(struct event_device *ed) {
   unsigned char packet[19];
   int fd = open("/dev/sysmouse", O_RDONLY);
@@ -428,7 +560,7 @@ int main() {
 
   struct event_device ed;
   event_device_init(&ed); // XXX
-  event_device_open(&ed, NULL, sysmouse_fill_function); // XXX
+  event_device_open(&ed, NULL, psm_fill_function); // XXX
 
   struct cuse_dev *evdevfbsddev = cuse_dev_create(
       &evdevfbsd_methods, &ed, NULL, 0, 0, 0444, "input/event0");
