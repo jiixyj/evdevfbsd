@@ -1,8 +1,10 @@
 #include <sys/mouse.h>
 #include <sys/param.h>
 
+#include <errno.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
 
@@ -25,6 +27,7 @@ struct event_device {
   sem_t event_buffer_sem;
   pthread_t fill_thread;
   bool has_reader;
+  void* priv_ptr;
 };
 
 int event_device_nr_free_buffer(struct event_device* ed) {
@@ -216,61 +219,67 @@ struct cuse_methods evdevfbsd_methods = {.cm_open = evdevfbsd_open,
                                          .cm_poll = evdevfbsd_poll,
                                          .cm_ioctl = evdevfbsd_ioctl};
 
-int event_device_init(struct event_device* ed) {
-  ed->fd = -1;
-  memset(&ed->event_buffer, 0, sizeof(ed->event_buffer));
-  ed->event_buffer_end = 0;
-  return pthread_mutex_init(&ed->event_buffer_mutex, NULL) ||
-         sem_init(&ed->event_buffer_sem, 0, 0);
-}
-
-int event_device_open(struct event_device *ed, char const *path,
-                      void *(*fill_function)(struct event_device *ed)) {
-  if (path) {
-    // TODO;
-  }
-
-  return pthread_create(&ed->fill_thread, NULL,
-                        (void *(*)(void *))fill_function, ed);
-}
-
-
 #define PACKET_MAX 32
-
-struct mouse_state {
-  int model;
-  uint32_t buttons;
-};
 
 int read_full_packet(int fd, unsigned char *buf, size_t siz) {
   ssize_t ret;
   while (siz) {
     ret = read(fd, buf, siz);
     if (ret <= 0)
-      return 0;
+      return 1;
     siz -= ret;
     buf += ret;
   }
+  return 0;
+}
+
+void put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
+               uint16_t code, int32_t value) {
+  struct input_event *buf;
+  buf = &ed->event_buffer[ed->event_buffer_end];
+  buf->time = *tv;
+  buf->type = type;
+  buf->code = code;
+  buf->value = value;
+  ++ed->event_buffer_end;
+  sem_post(&ed->event_buffer_sem);
+}
+
+struct psm_backend {
+  int fd;
+  mousehw_t hw_info;
+};
+
+int psm_backend_init(struct event_device *ed) {
+  ed->priv_ptr = malloc(sizeof(struct psm_backend));
+  if (!ed->priv_ptr)
+    return 1;
+
+  struct psm_backend *b = ed->priv_ptr;
+
+  b->fd = open("/dev/bpsm0", O_RDONLY);
+  if (b->fd == -1)
+    goto fail;
+
+  int level = 2;
+  if (ioctl(b->fd, MOUSE_SETLEVEL, &level) == -1)
+    goto fail;
+
+  if (ioctl(b->fd, MOUSE_GETHWINFO, &b->hw_info) == -1)
+    goto fail;
+
+  fprintf(stderr, "mouse model: %d\n", b->hw_info.model);
+  return 0;
+fail:
+  free(ed->priv_ptr);
   return 1;
 }
 
 void* psm_fill_function(struct event_device *ed) {
-  int fd = open("/dev/bpsm0", O_RDONLY);
-  if (fd == -1)
-    err(1, "open");
-
-  int level = 2;
-  if (ioctl(fd, MOUSE_SETLEVEL, &level) == -1)
-    err(1, "ioctl");
-
-  mousehw_t hw_info;
-  if (ioctl(fd, MOUSE_GETHWINFO, &hw_info) == -1)
-    err(1, "ioctl MOUSE_GETHWINFO");
-
-  fprintf(stderr, "mouse model: %d\n", hw_info.model);
+  struct psm_backend *b = ed->priv_ptr;
 
   size_t packetsize = MOUSE_PS2_PACKETSIZE;
-  switch (hw_info.model) {
+  switch (b->hw_info.model) {
     case MOUSE_MODEL_TRACKPOINT:
       packetsize = MOUSE_PS2_PACKETSIZE;
       break;
@@ -279,7 +288,7 @@ void* psm_fill_function(struct event_device *ed) {
   int obuttons = 0;
   unsigned char packet[PACKET_MAX];
 
-  while (read_full_packet(fd, packet, packetsize)) {
+  while (read_full_packet(b->fd, packet, packetsize) == 0) {
     pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
     if (!ed->has_reader) {
       obuttons = 0;
@@ -287,7 +296,7 @@ void* psm_fill_function(struct event_device *ed) {
       continue;
     }
 
-    switch (hw_info.model) {
+    switch (b->hw_info.model) {
       case MOUSE_MODEL_TRACKPOINT: {
         if (event_device_nr_free_buffer(ed) >= 6) {
           int buttons = (packet[0] & 0x07);
@@ -299,62 +308,20 @@ void* psm_fill_function(struct event_device *ed) {
           gettimeofday(&tv, NULL); // XXX
           struct input_event *buf;
 
-          if ((buttons ^ obuttons) & (1 << 0)) {
-            buf = &ed->event_buffer[ed->event_buffer_end];
-            buf->time = tv;
-            buf->type = EV_KEY;
-            buf->code = BTN_LEFT;
-            buf->value = !!(buttons & (1 << 0));
-            ++ed->event_buffer_end;
-            sem_post(&ed->event_buffer_sem);
-          }
-          if ((buttons ^ obuttons) & (1 << 1)) {
-            buf = &ed->event_buffer[ed->event_buffer_end];
-            buf->time = tv;
-            buf->type = EV_KEY;
-            buf->code = BTN_RIGHT;
-            buf->value = !!(buttons & (1 << 1));
-            ++ed->event_buffer_end;
-            sem_post(&ed->event_buffer_sem);
-          }
-          if ((buttons ^ obuttons) & (1 << 2)) {
-            buf = &ed->event_buffer[ed->event_buffer_end];
-            buf->time = tv;
-            buf->type = EV_KEY;
-            buf->code = BTN_MIDDLE;
-            buf->value = !!(buttons & (1 << 2));
-            ++ed->event_buffer_end;
-            sem_post(&ed->event_buffer_sem);
-          }
+          if ((buttons ^ obuttons) & (1 << 0))
+            put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
+          if ((buttons ^ obuttons) & (1 << 1))
+            put_event(ed, &tv, EV_KEY, BTN_RIGHT, !!(buttons & (1 << 1)));
+          if ((buttons ^ obuttons) & (1 << 2))
+            put_event(ed, &tv, EV_KEY, BTN_MIDDLE, !!(buttons & (1 << 2)));
 
-          if (x) {
-            buf = &ed->event_buffer[ed->event_buffer_end];
-            buf->time = tv;
-            buf->type = EV_REL;
-            buf->code = REL_X;
-            buf->value = x;
-            ++ed->event_buffer_end;
-            sem_post(&ed->event_buffer_sem);
-          }
-          if (y) {
-            buf = &ed->event_buffer[ed->event_buffer_end];
-            buf->time = tv;
-            buf->type = EV_REL;
-            buf->code = REL_Y;
-            buf->value = y;
-            ++ed->event_buffer_end;
-            sem_post(&ed->event_buffer_sem);
-          }
-          buf = &ed->event_buffer[ed->event_buffer_end];
-          buf->time = tv;
-          buf->type = EV_SYN;
-          buf->code = SYN_REPORT;
-          buf->value = 0;
-          ++ed->event_buffer_end;
-          sem_post(&ed->event_buffer_sem);
+          if (x)
+            put_event(ed, &tv, EV_REL, REL_X, x);
+          if (y)
+            put_event(ed, &tv, EV_REL, REL_Y, y);
 
+          put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
           cuse_poll_wakeup();
-
           obuttons = buttons;
         }
       }
@@ -366,21 +333,37 @@ void* psm_fill_function(struct event_device *ed) {
   return NULL;
 }
 
+struct sysmouse_backend {
+  int fd;
+};
+
+int sysmouse_backend_init(struct event_device *ed) {
+  ed->priv_ptr = malloc(sizeof(struct sysmouse_backend));
+  if (!ed->priv_ptr)
+    return 1;
+
+  struct sysmouse_backend *b = ed->priv_ptr;
+
+  b->fd = open("/dev/sysmouse", O_RDONLY);
+  if (b->fd == -1)
+    goto fail;
+
+  int level = 2;
+  if (ioctl(b->fd, MOUSE_SETLEVEL, &level) == -1)
+    goto fail;
+
+  return 0;
+fail:
+  free(ed->priv_ptr);
+  return 1;
+}
+
 void* sysmouse_fill_function(struct event_device *ed) {
-  unsigned char packet[19];
-  int fd = open("/dev/sysmouse", O_RDONLY);
-  if (fd == -1)
-    err(1, "open /dev/sysmouse failed");
-
-  {
-    int level = 2;
-    if (ioctl(fd, MOUSE_SETLEVEL, &level) == -1)
-      err(1, "ioctl MOUSE_SETLEVEL failed");
-  }
-
+  struct sysmouse_backend *b = ed->priv_ptr;
   int obuttons = 0;
+  unsigned char packet[19];
 
-  while (read(fd, packet, sizeof(packet)) == sizeof(packet)) {
+  while (read(b->fd, packet, sizeof(packet)) == sizeof(packet)) {
     pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
     if (!ed->has_reader) {
       obuttons = 0;
@@ -401,83 +384,27 @@ void* sysmouse_fill_function(struct event_device *ed) {
       gettimeofday(&tv, NULL); // XXX
       struct input_event *buf;
 
-      if ((buttons ^ obuttons) & MOUSE_SYS_BUTTON1UP) {
-        buf = &ed->event_buffer[ed->event_buffer_end];
-        buf->time = tv;
-        buf->type = EV_KEY;
-        buf->code = BTN_LEFT;
-        buf->value = (buttons & MOUSE_SYS_BUTTON1UP) ? 1 : 0;
-        ++ed->event_buffer_end;
-        sem_post(&ed->event_buffer_sem);
-      }
+      if ((buttons ^ obuttons) & MOUSE_SYS_BUTTON1UP)
+        put_event(ed, &tv, EV_KEY, BTN_LEFT,
+                  !!(buttons & MOUSE_SYS_BUTTON1UP));
+      if ((buttons ^ obuttons) & MOUSE_SYS_BUTTON2UP)
+        put_event(ed, &tv, EV_KEY, BTN_MIDDLE,
+                  !!(buttons & MOUSE_SYS_BUTTON2UP));
+      if ((buttons ^ obuttons) & MOUSE_SYS_BUTTON3UP)
+        put_event(ed, &tv, EV_KEY, BTN_RIGHT,
+                  !!(buttons & MOUSE_SYS_BUTTON3UP));
 
-      if ((buttons ^ obuttons) & MOUSE_SYS_BUTTON2UP) {
-        buf = &ed->event_buffer[ed->event_buffer_end];
-        buf->time = tv;
-        buf->type = EV_KEY;
-        buf->code = BTN_MIDDLE;
-        buf->value = (buttons & MOUSE_SYS_BUTTON2UP) ? 1 : 0;
-        ++ed->event_buffer_end;
-        sem_post(&ed->event_buffer_sem);
-      }
+      if (dx)
+        put_event(ed, &tv, EV_REL, REL_X, dx);
+      if (dy)
+        put_event(ed, &tv, EV_REL, REL_Y, dy);
+      if (dz)
+        put_event(ed, &tv, EV_REL, REL_WHEEL, dz);
+      if (dw)
+        put_event(ed, &tv, EV_REL, REL_HWHEEL, dw);
 
-      if ((buttons ^ obuttons) & MOUSE_SYS_BUTTON3UP) {
-        buf = &ed->event_buffer[ed->event_buffer_end];
-        buf->time = tv;
-        buf->type = EV_KEY;
-        buf->code = BTN_RIGHT;
-        buf->value = (buttons & MOUSE_SYS_BUTTON3UP) ? 1 : 0;
-        ++ed->event_buffer_end;
-        sem_post(&ed->event_buffer_sem);
-      }
-
-      if (dx) {
-        buf = &ed->event_buffer[ed->event_buffer_end];
-        buf->time = tv;
-        buf->type = EV_REL;
-        buf->code = REL_X;
-        buf->value = dx;
-        ++ed->event_buffer_end;
-        sem_post(&ed->event_buffer_sem);
-      }
-      if (dy) {
-        buf = &ed->event_buffer[ed->event_buffer_end];
-        buf->time = tv;
-        buf->type = EV_REL;
-        buf->code = REL_Y;
-        buf->value = dy;
-        ++ed->event_buffer_end;
-        sem_post(&ed->event_buffer_sem);
-      }
-      if (dz) {
-        buf = &ed->event_buffer[ed->event_buffer_end];
-        buf->time = tv;
-        buf->type = EV_REL;
-        buf->code = REL_WHEEL;
-        buf->value = dz;
-        ++ed->event_buffer_end;
-        sem_post(&ed->event_buffer_sem);
-      }
-      if (dw) {
-        buf = &ed->event_buffer[ed->event_buffer_end];
-        buf->time = tv;
-        buf->type = EV_REL;
-        buf->code = REL_HWHEEL;
-        buf->value = dw;
-        ++ed->event_buffer_end;
-        sem_post(&ed->event_buffer_sem);
-      }
-
-      buf = &ed->event_buffer[ed->event_buffer_end];
-      buf->time = tv;
-      buf->type = EV_SYN;
-      buf->code = SYN_REPORT;
-      buf->value = 0;
-      ++ed->event_buffer_end;
-      sem_post(&ed->event_buffer_sem);
-
+      put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
       cuse_poll_wakeup();
-
       obuttons = buttons;
     }
 
@@ -487,58 +414,11 @@ void* sysmouse_fill_function(struct event_device *ed) {
   return NULL;
 }
 
-void* dummy_fill_function(struct event_device *ed) {
-  for (;;) {
-    pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
-
-    if (ed->has_reader && event_device_nr_free_buffer(ed) >= 3) {
-      struct timeval tv;
-      gettimeofday(&tv, NULL); // XXX
-      struct input_event *buf;
-
-      buf = &ed->event_buffer[ed->event_buffer_end];
-      buf->time = tv;
-      buf->type = EV_REL;
-      buf->code = REL_X;
-      buf->value = 3;
-      ++ed->event_buffer_end;
-      sem_post(&ed->event_buffer_sem);
-
-      buf = &ed->event_buffer[ed->event_buffer_end];
-      buf->time = tv;
-      buf->type = EV_REL;
-      buf->code = REL_Y;
-      buf->value = 4;
-      ++ed->event_buffer_end;
-      sem_post(&ed->event_buffer_sem);
-
-      buf = &ed->event_buffer[ed->event_buffer_end];
-      buf->time = tv;
-      buf->type = EV_SYN;
-      buf->code = SYN_REPORT;
-      buf->value = 0;
-      ++ed->event_buffer_end;
-      sem_post(&ed->event_buffer_sem);
-
-      cuse_poll_wakeup();
-    }
-
-    pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
-
-    sleep(5);
-  }
-
-  return NULL;
-}
-
-void evdevfbsd_hup_catcher(int dummy) {
-  // puts("SIGHUP");
-}
+void evdevfbsd_hup_catcher(int dummy) {}
 
 void *wait_and_proc(void *notused) {
   int ret;
 
-  signal(SIGHUP, evdevfbsd_hup_catcher);
   struct sigaction act = {0};
   act.sa_handler = &evdevfbsd_hup_catcher;
   sigaction(SIGHUP, &act, NULL); // XXX
@@ -551,16 +431,38 @@ void *wait_and_proc(void *notused) {
   return NULL;
 }
 
+int event_device_init(struct event_device* ed) {
+  ed->fd = -1;
+  ed->event_buffer_end = 0;
+  return pthread_mutex_init(&ed->event_buffer_mutex, NULL) ||
+         sem_init(&ed->event_buffer_sem, 0, 0);
+}
+
+int event_device_open(struct event_device *ed, char const *path) {
+  void *(*fill_function)(void *);
+
+  if (!strcmp(path, "/dev/bpsm0")) {
+    psm_backend_init(ed);
+    fill_function = (void *(*)(void *)) psm_fill_function;
+  } else if (!strcmp(path, "/dev/sysmouse")) {
+    sysmouse_backend_init(ed);
+    fill_function = (void *(*)(void *)) sysmouse_fill_function;
+  } else {
+    return -EINVAL;
+  }
+
+  return pthread_create(&ed->fill_thread, NULL, fill_function, ed);
+}
+
 int main() {
   int ret;
 
   if ((ret = cuse_init()) < 0)
     errx(1, "cuse_init returned %d", ret);
 
-
   struct event_device ed;
   event_device_init(&ed); // XXX
-  event_device_open(&ed, NULL, psm_fill_function); // XXX
+  event_device_open(&ed, "/dev/bpsm0"); // XXX
 
   struct cuse_dev *evdevfbsddev = cuse_dev_create(
       &evdevfbsd_methods, &ed, NULL, 0, 0, 0444, "input/event0");
@@ -568,10 +470,14 @@ int main() {
     errx(1, "cuse_dev_create failed");
 
 
-  pthread_t worker1, worker2;
-  pthread_create(&worker1, NULL, wait_and_proc, NULL); // XXX
-  pthread_create(&worker2, NULL, wait_and_proc, NULL); // XXX
+  pthread_t worker[4];
+  pthread_create(&worker[0], NULL, wait_and_proc, NULL); // XXX
+  pthread_create(&worker[1], NULL, wait_and_proc, NULL); // XXX
+  pthread_create(&worker[2], NULL, wait_and_proc, NULL); // XXX
+  pthread_create(&worker[3], NULL, wait_and_proc, NULL); // XXX
 
-  pthread_join(worker2, NULL); // XXX
-  pthread_join(worker1, NULL); // XXX
+  pthread_join(worker[3], NULL); // XXX
+  pthread_join(worker[2], NULL); // XXX
+  pthread_join(worker[1], NULL); // XXX
+  pthread_join(worker[0], NULL); // XXX
 }
