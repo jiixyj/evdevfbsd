@@ -165,20 +165,20 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
       return 0;
   }
 
-  int base_cmd = IOCBASECMD(cmd);
-  int len = IOCPARM_LEN(cmd);
+  unsigned long base_cmd = IOCBASECMD(cmd);
+  unsigned long len = IOCPARM_LEN(cmd);
 
   switch (base_cmd) {
     case EVIOCGBIT(0, 0): {
       // printf("got ioctl EVIOCGBIT %d\n", len);
       return cuse_copy_out(ed->event_bits, peer_data,
-                           MIN((int)sizeof(ed->event_bits), len));
+                           MIN(sizeof(ed->event_bits), len));
     }
     case EVIOCGNAME(0): {
       // printf("got ioctl EVIOCGNAME %d\n", len);
       if (ed->device_name) {
         return cuse_copy_out(ed->device_name, peer_data,
-                             MIN((int)strlen(ed->device_name), len));
+                             MIN(strlen(ed->device_name), len));
       } else {
         return 0;
       }
@@ -194,12 +194,12 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
     case EVIOCGBIT(EV_REL, 0): {
       // printf("got ioctl EVIOCGBIT %d\n", len);
       return cuse_copy_out(ed->rel_bits, peer_data,
-                           MIN((int)sizeof(ed->rel_bits), len));
+                           MIN(sizeof(ed->rel_bits), len));
     }
     case EVIOCGBIT(EV_KEY, 0): {
       // printf("got ioctl EVIOCGBIT %d\n", len);
       return cuse_copy_out(ed->key_bits, peer_data,
-                           MIN((int)sizeof(ed->key_bits), len));
+                           MIN(sizeof(ed->key_bits), len));
     }
     case EVIOCGBIT(EV_ABS, 0):
     case EVIOCGBIT(EV_LED, 0):
@@ -209,7 +209,7 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
     case EVIOCGBIT(EV_SND, 0):
       // printf("got ioctl EVIOCGBIT %d\n", len);
       memset(bits, 0, sizeof(bits));
-      return cuse_copy_out(bits, peer_data, MIN((int)sizeof(bits), len));
+      return cuse_copy_out(bits, peer_data, MIN(sizeof(bits), len));
     case EVIOCGKEY(0):
       // printf("got ioctl EVIOCGKEY %d\n", len);
       return 0;
@@ -295,6 +295,11 @@ int psm_backend_init(struct event_device *ed) {
   ed->iid.vendor = 0x02;
 
   switch (b->hw_info.model) {
+    case MOUSE_MODEL_SYNAPTICS:
+      ed->device_name = "Synaptics";
+      ed->iid.product = PSMOUSE_SYNAPTICS;
+      set_bits_generic_ps2(ed);
+      break;
     case MOUSE_MODEL_TRACKPOINT:
       ed->device_name = "TPPS/2 IBM TrackPoint";
       ed->iid.product = PSMOUSE_TRACKPOINT;
@@ -318,6 +323,9 @@ void* psm_fill_function(struct event_device *ed) {
 
   size_t packetsize = MOUSE_PS2_PACKETSIZE;
   switch (b->hw_info.model) {
+    case MOUSE_MODEL_SYNAPTICS:
+      packetsize = MOUSE_SYNAPTICS_PACKETSIZE;
+      break;
     case MOUSE_MODEL_TRACKPOINT:
       packetsize = MOUSE_PS2_PACKETSIZE;
       break;
@@ -335,8 +343,23 @@ void* psm_fill_function(struct event_device *ed) {
     }
 
     switch (b->hw_info.model) {
+      case MOUSE_MODEL_SYNAPTICS: {
+        if (event_device_nr_free_buffer(ed) >= 6) {
+          int w = ((packet[0] & 0x30) >> 2) | ((packet[0] & 0x04) >> 1) |
+                  ((packet[3] & 0x04) >> 2);
+
+          if (w == 3) {
+            packet[0] = packet[1];
+            packet[1] = packet[4];
+            packet[2] = packet[5];
+            goto generic_ps2_packet;
+          }
+          break;
+        }
+      }
       case MOUSE_MODEL_GENERIC:
       case MOUSE_MODEL_TRACKPOINT: {
+generic_ps2_packet:
         if (event_device_nr_free_buffer(ed) >= 6) {
           int buttons = (packet[0] & 0x07);
           int x = (packet[0] & (1 << 4)) ? packet[1] - 256 : packet[1];
