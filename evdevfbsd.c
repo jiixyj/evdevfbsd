@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 #include "linux/input.h"
+#include "linux/mouse/psmouse.h"
 
 #define EVENT_BUFFER_SIZE 1024
 
@@ -28,6 +29,12 @@ struct event_device {
   pthread_t fill_thread;
   bool has_reader;
   void* priv_ptr;
+
+  struct input_id iid;
+  char const* device_name;
+  uint64_t event_bits[256];
+  uint64_t rel_bits[256];
+  uint64_t key_bits[256];
 };
 
 int event_device_nr_free_buffer(struct event_device* ed) {
@@ -133,19 +140,29 @@ void set_bit(uint64_t *array, int bit) {
 int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
                     void *peer_data) {
   uint64_t bits[256];
+  struct event_device* ed = cuse_dev_get_priv0(cdev);
+
+  switch (cmd) {
+    case TIOCFLUSH:
+    case FIONBIO:
+      // ignore these for now
+      return CUSE_ERR_INVALID;
+  }
 
   switch (cmd) {
     case EVIOCGID: {
       // printf("got ioctl EVIOCGID\n");
-      struct input_id iid = {0};
-      iid.bustype = BUS_VIRTUAL;
-      return cuse_copy_out(&iid, peer_data, sizeof(iid));
+      return cuse_copy_out(&ed->iid, peer_data, sizeof(ed->iid));
     }
     case EVIOCGVERSION: {
       // printf("got ioctl EVIOCGVERSION\n");
       int version = EV_VERSION;
       return cuse_copy_out(&version, peer_data, sizeof(version));
     }
+    case EVIOCGRAB:
+      // Can be noop, event devices are always grabbed exclusively
+      printf("got ioctl EVIOCGRAB\n");
+      return 0;
   }
 
   int base_cmd = IOCBASECMD(cmd);
@@ -154,15 +171,17 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
   switch (base_cmd) {
     case EVIOCGBIT(0, 0): {
       // printf("got ioctl EVIOCGBIT %d\n", len);
-      memset(bits, 0, sizeof(bits));
-      set_bit(bits, EV_KEY);
-      set_bit(bits, EV_REL);
-      return cuse_copy_out(bits, peer_data, MIN((int)sizeof(bits), len));
+      return cuse_copy_out(ed->event_bits, peer_data,
+                           MIN((int)sizeof(ed->event_bits), len));
     }
     case EVIOCGNAME(0): {
       // printf("got ioctl EVIOCGNAME %d\n", len);
-      const char* name = "testmouse";
-      return cuse_copy_out(name, peer_data, MIN((int)strlen(name), len));
+      if (ed->device_name) {
+        return cuse_copy_out(ed->device_name, peer_data,
+                             MIN((int)strlen(ed->device_name), len));
+      } else {
+        return 0;
+      }
     }
     case EVIOCGPHYS(0):
       // printf("got ioctl EVIOCGPHYS %d\n", len);
@@ -174,23 +193,16 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
       return 0;
     case EVIOCGBIT(EV_REL, 0): {
       // printf("got ioctl EVIOCGBIT %d\n", len);
-      memset(bits, 0, sizeof(bits));
-      set_bit(bits, REL_X);
-      set_bit(bits, REL_Y);
-      set_bit(bits, REL_WHEEL);
-      set_bit(bits, REL_HWHEEL);
-      return cuse_copy_out(bits, peer_data, MIN((int)sizeof(bits), len));
+      return cuse_copy_out(ed->rel_bits, peer_data,
+                           MIN((int)sizeof(ed->rel_bits), len));
+    }
+    case EVIOCGBIT(EV_KEY, 0): {
+      // printf("got ioctl EVIOCGBIT %d\n", len);
+      return cuse_copy_out(ed->key_bits, peer_data,
+                           MIN((int)sizeof(ed->key_bits), len));
     }
     case EVIOCGBIT(EV_ABS, 0):
     case EVIOCGBIT(EV_LED, 0):
-    case EVIOCGBIT(EV_KEY, 0): {
-      // printf("got ioctl EVIOCGBIT %d\n", len);
-      memset(bits, 0, sizeof(bits));
-      set_bit(bits, BTN_LEFT);
-      set_bit(bits, BTN_MIDDLE);
-      set_bit(bits, BTN_RIGHT);
-      return cuse_copy_out(bits, peer_data, MIN((int)sizeof(bits), len));
-    }
     case EVIOCGBIT(EV_SW, 0):
     case EVIOCGBIT(EV_MSC, 0):
     case EVIOCGBIT(EV_FF, 0):
@@ -209,7 +221,7 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
       return 0;
   }
 
-  printf("got ioctl %lu\n", cmd);
+  printf("got ioctl %lu %lu %lu\n", cmd, base_cmd, len);
   return CUSE_ERR_INVALID;
 }
 
@@ -250,6 +262,16 @@ struct psm_backend {
   mousehw_t hw_info;
 };
 
+void set_bits_generic_ps2(struct event_device *ed) {
+  set_bit(ed->event_bits, EV_REL);
+  set_bit(ed->event_bits, EV_KEY);
+  set_bit(ed->key_bits, BTN_LEFT);
+  set_bit(ed->key_bits, BTN_RIGHT);
+  set_bit(ed->key_bits, BTN_MIDDLE);
+  set_bit(ed->rel_bits, REL_X);
+  set_bit(ed->rel_bits, REL_Y);
+}
+
 int psm_backend_init(struct event_device *ed) {
   ed->priv_ptr = malloc(sizeof(struct psm_backend));
   if (!ed->priv_ptr)
@@ -268,7 +290,23 @@ int psm_backend_init(struct event_device *ed) {
   if (ioctl(b->fd, MOUSE_GETHWINFO, &b->hw_info) == -1)
     goto fail;
 
-  fprintf(stderr, "mouse model: %d\n", b->hw_info.model);
+
+  ed->iid.bustype = BUS_I8042;
+  ed->iid.vendor = 0x02;
+
+  switch (b->hw_info.model) {
+    case MOUSE_MODEL_TRACKPOINT:
+      ed->device_name = "TPPS/2 IBM TrackPoint";
+      ed->iid.product = PSMOUSE_TRACKPOINT;
+      set_bits_generic_ps2(ed);
+      break;
+    case MOUSE_MODEL_GENERIC:
+      ed->device_name = "Generic Mouse"; // XXX not sure
+      ed->iid.product = PSMOUSE_PS2; // XXX not sure
+      set_bits_generic_ps2(ed);
+      break;
+  }
+
   return 0;
 fail:
   free(ed->priv_ptr);
@@ -297,6 +335,7 @@ void* psm_fill_function(struct event_device *ed) {
     }
 
     switch (b->hw_info.model) {
+      case MOUSE_MODEL_GENERIC:
       case MOUSE_MODEL_TRACKPOINT: {
         if (event_device_nr_free_buffer(ed) >= 6) {
           int buttons = (packet[0] & 0x07);
@@ -432,6 +471,7 @@ void *wait_and_proc(void *notused) {
 }
 
 int event_device_init(struct event_device* ed) {
+  memset(ed, 0, sizeof(*ed));
   ed->fd = -1;
   ed->event_buffer_end = 0;
   return pthread_mutex_init(&ed->event_buffer_mutex, NULL) ||
