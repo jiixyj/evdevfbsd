@@ -35,6 +35,7 @@ struct event_device {
   sem_t event_buffer_sem;
   pthread_t fill_thread;
   bool has_reader;
+  int clock;
   void* priv_ptr;
   int(*get_mt_slot_data)(struct event_device *, struct input_mt_request *);
 
@@ -47,6 +48,14 @@ struct event_device {
   uint64_t prop_bits[256];
   struct input_absinfo abs_info[ABS_MAX];
 };
+
+void get_clock_value(struct event_device *ed, struct timeval *tv) {
+  struct timespec ts;
+  clock_gettime(ed->clock, &ts); // XXX
+  struct bintime bt;
+  timespec2bintime(&ts, &bt);
+  bintime2timeval(&bt, tv);
+}
 
 int event_device_nr_free_buffer(struct event_device* ed) {
   return EVENT_BUFFER_SIZE - ed->event_buffer_end;
@@ -175,6 +184,17 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
       // Can be noop, event devices are always grabbed exclusively
       printf("got ioctl EVIOCGRAB\n");
       return 0;
+    case EVIOCSCLOCKID: {
+      int new_clock, ret;
+      if ((ret = cuse_copy_in(peer_data, &new_clock, sizeof(new_clock))))
+        return ret;
+      if (new_clock == CLOCK_REALTIME || new_clock == CLOCK_MONOTONIC) {
+        ed->clock = new_clock;
+        return 0;
+      } else {
+        return CUSE_ERR_INVALID;
+      }
+    }
   }
 
   unsigned long base_cmd = IOCBASECMD(cmd);
@@ -630,7 +650,7 @@ void* psm_fill_function(struct event_device *ed) {
           }
 
           struct timeval tv;
-          gettimeofday(&tv, NULL); // XXX
+          get_clock_value(ed, &tv);
 
           if ((buttons ^ obuttons) & (1 << 0))
             put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
@@ -733,7 +753,7 @@ void* psm_fill_function(struct event_device *ed) {
           y = -y;
 
           struct timeval tv;
-          gettimeofday(&tv, NULL); // XXX
+          get_clock_value(ed, &tv);
 
           if ((buttons ^ obuttons) & (1 << 0))
             put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
@@ -803,7 +823,7 @@ void* sysmouse_fill_function(struct event_device *ed) {
       dw = (int16_t)((packet[14] << 9) | (packet[15] << 2)) >> 2;
 
       struct timeval tv;
-      gettimeofday(&tv, NULL); // XXX
+      get_clock_value(ed, &tv);
 
       if ((buttons ^ obuttons) & MOUSE_SYS_BUTTON1UP)
         put_event(ed, &tv, EV_KEY, BTN_LEFT,
@@ -857,6 +877,7 @@ int event_device_init(struct event_device* ed) {
   memset(ed, 0, sizeof(*ed));
   ed->fd = -1;
   ed->event_buffer_end = 0;
+  ed->clock = CLOCK_REALTIME;
   return pthread_mutex_init(&ed->event_buffer_mutex, NULL) ||
          sem_init(&ed->event_buffer_sem, 0, 0);
 }
