@@ -593,7 +593,7 @@ void* psm_fill_function(struct event_device *ed) {
 
     switch (b->hw_info.model) {
       case MOUSE_MODEL_SYNAPTICS: {
-        if (event_device_nr_free_buffer(ed) >= 16) {
+        if (event_device_nr_free_buffer(ed) >= 24) {
           int w = ((packet[0] & 0x30) >> 2) | ((packet[0] & 0x04) >> 1) |
                   ((packet[3] & 0x04) >> 2);
 
