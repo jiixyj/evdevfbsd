@@ -342,8 +342,7 @@ struct psm_backend {
   // synaptics stuff
   synapticshw_t synaptics_info;
   struct synaptics_ew_state ews;
-  struct synaptics_slot_state ss0;
-  struct synaptics_slot_state ss1;
+  struct synaptics_slot_state ss[2];
 };
 
 void set_bits_generic_ps2(struct event_device *ed) {
@@ -413,16 +412,16 @@ int synaptics_get_mt_slot_data(struct event_device *ed,
   printf("get_mt_slot_data %u\n", mtr->code);
   switch (mtr->code) {
     case ABS_MT_POSITION_X:
-      mtr->values[0] = b->ss0.x;
-      mtr->values[1] = b->ss1.x;
+      mtr->values[0] = b->ss[0].x;
+      mtr->values[1] = b->ss[1].x;
       break;
     case ABS_MT_POSITION_Y:
-      mtr->values[0] = b->ss0.y;
-      mtr->values[1] = b->ss1.y;
+      mtr->values[0] = b->ss[0].y;
+      mtr->values[1] = b->ss[1].y;
       break;
     case ABS_MT_TRACKING_ID:
-      mtr->values[0] = b->ss0.tracking_id;
-      mtr->values[1] = b->ss1.tracking_id;
+      mtr->values[0] = b->ss[0].tracking_id;
+      mtr->values[1] = b->ss[1].tracking_id;
       break;
     default:
       return CUSE_ERR_INVALID;
@@ -460,9 +459,9 @@ int psm_backend_init(struct event_device *ed) {
       if (ioctl(b->fd, MOUSE_SYN_GETHWINFO, &b->synaptics_info) == -1)
         goto fail;
       b->ews.x = b->ews.y = b->ews.z = 0;
-      b->ss0.x = b->ss0.y = 0;
-      b->ss1.x = b->ss1.y = 0;
-      b->ss0.tracking_id = b->ss1.tracking_id = -1;
+      b->ss[0].x = b->ss[0].y = 0;
+      b->ss[1].x = b->ss[1].y = 0;
+      b->ss[0].tracking_id = b->ss[1].tracking_id = -1;
 
       printf("synaptics info:\n");
       printf("  capPalmDetect: %d\n", b->synaptics_info.capPalmDetect);
@@ -586,8 +585,6 @@ void* psm_fill_function(struct event_device *ed) {
   }
 
   int obuttons = 0;
-  int oslot0 = 0;
-  int oslot1 = 0;
   uint16_t tracking_ids = 0;
   unsigned char packet[PACKET_MAX];
 
@@ -665,56 +662,51 @@ void* psm_fill_function(struct event_device *ed) {
 
           if (b->synaptics_info.capAdvancedGestures) {
             if (no_fingers >= 2) {
-              b->ss0.x = MIN(x, b->ews.x);
-              b->ss0.y = synaptics_reverse_y(MIN(y, b->ews.y));
+              b->ss[0].x = MIN(x, b->ews.x);
+              b->ss[0].y = synaptics_reverse_y(MIN(y, b->ews.y));
               put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 0);
-              if (!oslot0) {
+              if (b->ss[0].tracking_id == -1) {
                 put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, ++tracking_ids);
-                b->ss0.tracking_id = tracking_ids;
+                b->ss[0].tracking_id = tracking_ids;
               }
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, b->ss0.x);
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y, b->ss0.y);
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, b->ss[0].x);
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y, b->ss[0].y);
 
-              b->ss1.x = MAX(x, b->ews.x);
-              b->ss1.y = synaptics_reverse_y(MAX(y, b->ews.y));
+              b->ss[1].x = MAX(x, b->ews.x);
+              b->ss[1].y = synaptics_reverse_y(MAX(y, b->ews.y));
               put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 1);
-              if (!oslot1) {
+              if (b->ss[1].tracking_id == -1) {
                 put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, ++tracking_ids);
-                b->ss1.tracking_id = tracking_ids;
+                b->ss[1].tracking_id = tracking_ids;
               }
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, b->ss1.x);
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y, b->ss1.y);
-
-              oslot0 = oslot1 = 1;
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, b->ss[1].x);
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y, b->ss[1].y);
             } else if (no_fingers == 1) {
-              b->ss0.x = x;
-              b->ss0.y = synaptics_reverse_y(y);
+              b->ss[0].x = x;
+              b->ss[0].y = synaptics_reverse_y(y);
               put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 0);
-              if (!oslot0) {
+              if (b->ss[0].tracking_id == -1) {
                 put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, ++tracking_ids);
-                b->ss0.tracking_id = tracking_ids;
+                b->ss[0].tracking_id = tracking_ids;
               }
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, b->ss0.x);
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y, b->ss0.y);
-              if (oslot1) {
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, b->ss[0].x);
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y, b->ss[0].y);
+              if (b->ss[1].tracking_id >= 0) {
                 put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 1);
                 put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, -1);
-                b->ss1.tracking_id = -1;
+                b->ss[1].tracking_id = -1;
               }
-              oslot0 = 1;
-              oslot1 = 0;
             } else {
-              if (oslot0) {
+              if (b->ss[0].tracking_id >= 0) {
                 put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 0);
                 put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, -1);
-                b->ss0.tracking_id = -1;
+                b->ss[0].tracking_id = -1;
               }
-              if (oslot1) {
+              if (b->ss[1].tracking_id >= 0) {
                 put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 1);
                 put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, -1);
-                b->ss1.tracking_id = -1;
+                b->ss[1].tracking_id = -1;
               }
-              oslot0 = oslot1 = 0;
             }
           }
 
