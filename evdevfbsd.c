@@ -35,6 +35,8 @@ struct event_device {
   uint64_t event_bits[256];
   uint64_t rel_bits[256];
   uint64_t key_bits[256];
+  uint64_t abs_bits[256];
+  struct input_absinfo abs_info[ABS_MAX];
 };
 
 int event_device_nr_free_buffer(struct event_device* ed) {
@@ -201,7 +203,11 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
       return cuse_copy_out(ed->key_bits, peer_data,
                            MIN(sizeof(ed->key_bits), len));
     }
-    case EVIOCGBIT(EV_ABS, 0):
+    case EVIOCGBIT(EV_ABS, 0): {
+      // printf("got ioctl EVIOCGBIT %d\n", len);
+      return cuse_copy_out(ed->abs_bits, peer_data,
+                           MIN(sizeof(ed->abs_bits), len));
+    }
     case EVIOCGBIT(EV_LED, 0):
     case EVIOCGBIT(EV_SW, 0):
     case EVIOCGBIT(EV_MSC, 0):
@@ -219,6 +225,14 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
     case EVIOCGSW(0):
       // printf("got ioctl EVIOCGSW %d\n", len);
       return 0;
+  }
+
+  if ((cmd & IOC_DIRMASK) == IOC_OUT) {
+    if ((cmd & ~ABS_MAX) == EVIOCGABS(0)) {
+      printf("got eviocgabs for axis %d\n", cmd & ABS_MAX);
+      return cuse_copy_out(&ed->abs_info[cmd & ABS_MAX], peer_data,
+                           MIN(sizeof(struct input_absinfo), len));
+    }
   }
 
   printf("got ioctl %lu %lu %lu\n", cmd, base_cmd, len);
@@ -257,11 +271,18 @@ void put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
   sem_post(&ed->event_buffer_sem);
 }
 
+struct synaptics_ew_state {
+  int x;
+  int y;
+  int z;
+};
+
 struct psm_backend {
   int fd;
   mousehw_t hw_info;
   int guest_dev_fd;
   synapticshw_t synaptics_info;
+  struct synaptics_ew_state ews;
 };
 
 void set_bits_generic_ps2(struct event_device *ed) {
@@ -272,6 +293,13 @@ void set_bits_generic_ps2(struct event_device *ed) {
   set_bit(ed->key_bits, BTN_MIDDLE);
   set_bit(ed->rel_bits, REL_X);
   set_bit(ed->rel_bits, REL_Y);
+}
+
+int32_t synaptics_reverse_y(int32_t y) {
+  y -= 2928;
+  y = -y;
+  y += 2928;
+  return y;
 }
 
 int psm_backend_init(struct event_device *ed) {
@@ -299,11 +327,84 @@ int psm_backend_init(struct event_device *ed) {
 
   switch (b->hw_info.model) {
     case MOUSE_MODEL_SYNAPTICS:
-      ed->device_name = "Synaptics";
+      ed->device_name = "SynPS/2 Synaptics TouchPad";
       ed->iid.product = PSMOUSE_SYNAPTICS;
       if (ioctl(b->fd, MOUSE_SYN_GETHWINFO, &b->synaptics_info) == -1)
         goto fail;
-      set_bits_generic_ps2(ed);
+      b->ews.x = b->ews.y = b->ews.z = 0;
+
+      printf("synaptics info:\n");
+      printf("  capPalmDetect: %d\n", b->synaptics_info.capPalmDetect);
+      printf("  capMultiFinger: %d\n", b->synaptics_info.capMultiFinger);
+      printf("  capAdvancedGestures: %d\n",
+             b->synaptics_info.capAdvancedGestures);
+      printf("  capEWmode: %d\n", b->synaptics_info.capEWmode);
+      printf("  nExtendedQueries: %d\n", b->synaptics_info.nExtendedQueries);
+
+      set_bit(ed->event_bits, EV_ABS);
+      set_bit(ed->event_bits, EV_KEY);
+      set_bit(ed->key_bits, BTN_LEFT);
+      set_bit(ed->key_bits, BTN_RIGHT);
+      if (b->synaptics_info.capMiddle) {
+        set_bit(ed->key_bits, BTN_MIDDLE);
+      }
+      if (b->synaptics_info.capFourButtons) {
+        set_bit(ed->key_bits, BTN_FORWARD);
+        set_bit(ed->key_bits, BTN_BACK);
+      }
+      set_bit(ed->key_bits, BTN_TOUCH);
+      set_bit(ed->key_bits, BTN_TOOL_FINGER);
+      if (b->synaptics_info.capMultiFinger) {
+        set_bit(ed->key_bits, BTN_TOOL_DOUBLETAP);
+        set_bit(ed->key_bits, BTN_TOOL_TRIPLETAP);
+      }
+
+      set_bit(ed->abs_bits, ABS_X);
+      set_bit(ed->abs_bits, ABS_Y);
+      ed->abs_info[ABS_X].minimum = 1472;
+      ed->abs_info[ABS_X].maximum = 5472;
+      ed->abs_info[ABS_Y].minimum = 1408;
+      ed->abs_info[ABS_Y].maximum = 4448;
+      switch (b->synaptics_info.infoSensor) {
+        case 1:
+          ed->abs_info[ABS_X].resolution = 85;
+          ed->abs_info[ABS_Y].resolution = 94;
+          break;
+        case 2:
+          ed->abs_info[ABS_X].resolution = 91;
+          ed->abs_info[ABS_Y].resolution = 124;
+          break;
+        case 3:
+          ed->abs_info[ABS_X].resolution = 57;
+          ed->abs_info[ABS_Y].resolution = 58;
+          break;
+        case 8:
+          ed->abs_info[ABS_X].resolution = 85;
+          ed->abs_info[ABS_Y].resolution = 94;
+          break;
+        case 9:
+          ed->abs_info[ABS_X].resolution = 73;
+          ed->abs_info[ABS_Y].resolution = 96;
+          break;
+        case 11:
+          ed->abs_info[ABS_X].resolution = 187;
+          ed->abs_info[ABS_Y].resolution = 170;
+          break;
+        case 12:
+          ed->abs_info[ABS_X].resolution = 122;
+          ed->abs_info[ABS_Y].resolution = 167;
+          break;
+        default:
+          goto fail;
+      }
+      set_bit(ed->abs_bits, ABS_PRESSURE);
+      ed->abs_info[ABS_PRESSURE].minimum = 0;
+      ed->abs_info[ABS_PRESSURE].maximum = 255;
+      if (b->synaptics_info.capPalmDetect) {
+        set_bit(ed->abs_bits, ABS_TOOL_WIDTH);
+        ed->abs_info[ABS_TOOL_WIDTH].minimum = 0;
+        ed->abs_info[ABS_TOOL_WIDTH].maximum = 15;
+      }
       break;
     case MOUSE_MODEL_TRACKPOINT:
       ed->device_name = "TPPS/2 IBM TrackPoint";
@@ -343,6 +444,22 @@ int write_full_packet(int fd, unsigned char* pkt, size_t siz) {
   return 0;
 }
 
+void synaptic_parse_ew_packet(struct event_device *ed, unsigned char *packet) {
+  struct psm_backend *b = ed->priv_ptr;
+
+  int ew_packet_code = (packet[5] & 0xf0) >> 4;
+  switch (ew_packet_code) {
+    case 1:
+      b->ews.x = (((packet[4] & 0x0f) << 8) | packet[1]) << 1;
+      b->ews.y = (((packet[4] & 0xf0) << 4) | packet[2]) << 1;
+      b->ews.z = ((packet[3] & 0x30) | (packet[5] & 0x0f)) << 1;
+      break;
+    default:
+      // ignore scroll wheel and finger count packets
+      break;
+  }
+}
+
 void* psm_fill_function(struct event_device *ed) {
   struct psm_backend *b = ed->priv_ptr;
 
@@ -369,9 +486,12 @@ void* psm_fill_function(struct event_device *ed) {
 
     switch (b->hw_info.model) {
       case MOUSE_MODEL_SYNAPTICS: {
-        if (event_device_nr_free_buffer(ed) >= 6) {
+        if (event_device_nr_free_buffer(ed) >= 16) {
           int w = ((packet[0] & 0x30) >> 2) | ((packet[0] & 0x04) >> 1) |
                   ((packet[3] & 0x04) >> 2);
+
+          printf("%3d %3d %3d %3d %3d %3d %d\n", packet[0], packet[1],
+                 packet[2], packet[3], packet[4], packet[5], w);
 
           if (w == 3) {
             packet[0] = packet[1];
@@ -381,12 +501,88 @@ void* psm_fill_function(struct event_device *ed) {
               write_full_packet(b->guest_dev_fd, packet, 3);
             }
             break;
+          } else if (w == 2) {
+            synaptic_parse_ew_packet(ed, packet);
+            break;
           }
           if (!ed->has_reader)
             break;
-          //
-          // TODO
-          //
+
+          int buttons = 0;
+          if (packet[0] & 0x01)
+            buttons |= (1 << 0);
+          if (packet[0] & 0x02)
+            buttons |= (1 << 1);
+
+          if (b->synaptics_info.capFourButtons) {
+            if ((packet[3] ^ packet[0]) & 0x01)
+              buttons |= (1 << 5);
+            if ((packet[3] ^ packet[0]) & 0x02)
+              buttons |= (1 << 6);
+          } else if (b->synaptics_info.capMiddle) {
+            if ((packet[0] ^ packet[3]) & 0x01)
+              buttons |= (1 << 2);
+          }
+
+          int x = (((packet[3] & 0x10) << 8) | ((packet[1] & 0x0f) << 8) |
+                   packet[4]);
+          int y = (((packet[3] & 0x20) << 7) | ((packet[1] & 0xf0) << 4) |
+                   packet[5]);
+          int z = packet[2];
+          int no_fingers = 0;
+          int finger_width = 0;
+          if (z > 0 && x > 1) {
+            no_fingers = 1;
+            finger_width = 5;
+            if (w <= 1 && b->synaptics_info.capMultiFinger) {
+              no_fingers = w + 2;
+            } else if (w >= 4 && w <= 15 && b->synaptics_info.capPalmDetect) {
+              finger_width = w;
+            }
+          }
+
+          struct timeval tv;
+          gettimeofday(&tv, NULL); // XXX
+          struct input_event *buf;
+
+          if ((buttons ^ obuttons) & (1 << 0))
+            put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
+          if ((buttons ^ obuttons) & (1 << 1))
+            put_event(ed, &tv, EV_KEY, BTN_RIGHT, !!(buttons & (1 << 1)));
+          if ((buttons ^ obuttons) & (1 << 2))
+            put_event(ed, &tv, EV_KEY, BTN_MIDDLE, !!(buttons & (1 << 2)));
+          if ((buttons ^ obuttons) & (1 << 5))
+            put_event(ed, &tv, EV_KEY, BTN_FORWARD, !!(buttons & (1 << 5)));
+          if ((buttons ^ obuttons) & (1 << 6))
+            put_event(ed, &tv, EV_KEY, BTN_BACK, !!(buttons & (1 << 6)));
+
+          if (b->synaptics_info.capAdvancedGestures) {
+            // TODO
+          }
+
+          if (z > 30)
+            put_event(ed, &tv, EV_KEY, BTN_TOUCH, 1);
+          if (z < 25)
+            put_event(ed, &tv, EV_KEY, BTN_TOUCH, 0);
+          if (no_fingers > 0) {
+            if (x > 1)
+              put_event(ed, &tv, EV_ABS, ABS_X, x);
+            if (y > 1)
+              put_event(ed, &tv, EV_ABS, ABS_Y, synaptics_reverse_y(y));
+          }
+          put_event(ed, &tv, EV_ABS, ABS_PRESSURE, z);
+          if (b->synaptics_info.capPalmDetect)
+            put_event(ed, &tv, EV_ABS, ABS_TOOL_WIDTH, finger_width);
+
+          put_event(ed, &tv, EV_KEY, BTN_TOOL_FINGER, no_fingers == 1);
+          if (b->synaptics_info.capMultiFinger) {
+            put_event(ed, &tv, EV_KEY, BTN_TOOL_DOUBLETAP, no_fingers == 2);
+            put_event(ed, &tv, EV_KEY, BTN_TOOL_TRIPLETAP, no_fingers == 3);
+          }
+
+          put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
+          cuse_poll_wakeup();
+          obuttons = buttons;
           break;
         }
       }
