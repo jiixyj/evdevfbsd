@@ -34,7 +34,7 @@ struct event_device {
   pthread_mutex_t event_buffer_mutex;
   sem_t event_buffer_sem;
   pthread_t fill_thread;
-  bool has_reader;
+  bool is_open;
   int clock;
   void* priv_ptr;
   int(*get_mt_slot_data)(struct event_device *, struct input_mt_request *);
@@ -68,10 +68,10 @@ int evdevfbsd_open(struct cuse_dev *cdev, int fflags __unused) {
   int ret = CUSE_ERR_NONE;
 
   pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
-  if (ed->has_reader) {
+  if (ed->is_open) {
     ret = CUSE_ERR_BUSY;
   } else {
-    ed->has_reader = true;
+    ed->is_open = true;
   }
   pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
   return ret;
@@ -85,7 +85,7 @@ int evdevfbsd_close(struct cuse_dev *cdev, int fflags __unused) {
   for (int i = 0; i < ed->event_buffer_end; ++i)
     sem_wait(&ed->event_buffer_sem);
   ed->event_buffer_end = 0;
-  ed->has_reader = false;
+  ed->is_open = false;
   pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
   return CUSE_ERR_NONE;
 }
@@ -310,7 +310,7 @@ int read_full_packet(int fd, unsigned char *buf, size_t siz) {
 
 void put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
                uint16_t code, int32_t value) {
-  if (ed->has_reader) {
+  if (ed->is_open) {
     struct input_event *buf;
     buf = &ed->event_buffer[ed->event_buffer_end];
     buf->time = *tv;
