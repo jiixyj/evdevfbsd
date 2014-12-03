@@ -19,6 +19,7 @@
 #define __s16 int16_t
 #define __s32 int32_t
 #define _IOC_READ IOC_OUT
+#define _IOC_WRITE IOC_IN
 #else
 #include <linux/types.h>
 #endif
@@ -143,7 +144,7 @@ struct input_keymap_entry {
  *
  * If the request code is not an ABS_MT value, -EINVAL is returned.
  */
-#define EVIOCGMTSLOTS(len)	_IOC(_IOC_READ, 'E', 0x0a, len)
+#define EVIOCGMTSLOTS(len)	_IOC(IOC_INOUT, 'E', 0x0a, len)
 
 #define EVIOCGKEY(len)		_IOC(_IOC_READ, 'E', 0x18, len)		/* get global key state */
 #define EVIOCGLED(len)		_IOC(_IOC_READ, 'E', 0x19, len)		/* get all LEDs */

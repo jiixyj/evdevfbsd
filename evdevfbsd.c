@@ -13,12 +13,19 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <termios.h>
 #include <unistd.h>
 
 #include "linux/input.h"
 #include "linux/mouse/psmouse.h"
+#include "zero_initializer.h"
 
 #define EVENT_BUFFER_SIZE 1024
+
+struct input_mt_request {
+  uint32_t code;
+  int32_t values[256];
+};
 
 struct event_device {
   int fd;
@@ -29,6 +36,7 @@ struct event_device {
   pthread_t fill_thread;
   bool has_reader;
   void* priv_ptr;
+  int(*get_mt_slot_data)(struct event_device *, struct input_mt_request *);
 
   struct input_id iid;
   char const* device_name;
@@ -44,7 +52,7 @@ int event_device_nr_free_buffer(struct event_device* ed) {
   return EVENT_BUFFER_SIZE - ed->event_buffer_end;
 }
 
-int evdevfbsd_open(struct cuse_dev *cdev, int fflags) {
+int evdevfbsd_open(struct cuse_dev *cdev, int fflags __unused) {
   // puts("device opened");
   struct event_device *ed = cuse_dev_get_priv0(cdev);
 
@@ -60,7 +68,7 @@ int evdevfbsd_open(struct cuse_dev *cdev, int fflags) {
   return ret;
 }
 
-int evdevfbsd_close(struct cuse_dev *cdev, int fflags) {
+int evdevfbsd_close(struct cuse_dev *cdev, int fflags __unused) {
   // puts("device closed");
   struct event_device *ed = cuse_dev_get_priv0(cdev);
 
@@ -73,7 +81,7 @@ int evdevfbsd_close(struct cuse_dev *cdev, int fflags) {
   return CUSE_ERR_NONE;
 }
 
-int evdevfbsd_read(struct cuse_dev *cdev, int fflags, void *user_ptr,
+int evdevfbsd_read(struct cuse_dev *cdev, int fflags __unused, void *user_ptr,
                    int len) {
   if (len < 0)
     return CUSE_ERR_INVALID;
@@ -121,7 +129,7 @@ retry:
 }
 
 
-int evdevfbsd_poll(struct cuse_dev *cdev, int fflags, int events) {
+int evdevfbsd_poll(struct cuse_dev *cdev, int fflags __unused, int events) {
   if (!(events & CUSE_POLL_READ))
     return CUSE_POLL_NONE;
 
@@ -140,13 +148,14 @@ void set_bit(uint64_t *array, int bit) {
   array[bit / 64] |= (1LL << (bit % 64));
 }
 
-int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
-                    void *peer_data) {
+int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
+                    unsigned long cmd, void *peer_data) {
   uint64_t bits[256];
   struct event_device* ed = cuse_dev_get_priv0(cdev);
 
   switch (cmd) {
     case TIOCFLUSH:
+    case TIOCGETA:
     case FIONBIO:
       // ignore these for now
       return CUSE_ERR_INVALID;
@@ -229,11 +238,27 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
     case EVIOCGPROP(0):
       return cuse_copy_out(ed->prop_bits, peer_data,
                            MIN(sizeof(ed->prop_bits), len));
+    case EVIOCGMTSLOTS(0): {
+      if (ed->get_mt_slot_data) {
+        int ret;
+        uint32_t code;
+        if ((ret = cuse_copy_in(peer_data, &code, sizeof(code))))
+          return ret;
+        struct input_mt_request mtr = ZERO_INITIALIZER;
+        mtr.code = code;
+        if ((ret = ed->get_mt_slot_data(ed, &mtr)))
+          return ret;
+        return cuse_copy_out(&mtr, peer_data,
+                             MIN(sizeof(struct input_mt_request), len));
+      } else {
+        return CUSE_ERR_INVALID;
+      }
+    }
   }
 
   if ((cmd & IOC_DIRMASK) == IOC_OUT) {
     if ((cmd & ~ABS_MAX) == EVIOCGABS(0)) {
-      printf("got eviocgabs for axis %d\n", cmd & ABS_MAX);
+      printf("got eviocgabs for axis %ld\n", cmd & ABS_MAX);
       return cuse_copy_out(&ed->abs_info[cmd & ABS_MAX], peer_data,
                            MIN(sizeof(struct input_absinfo), len));
     }
@@ -265,28 +290,40 @@ int read_full_packet(int fd, unsigned char *buf, size_t siz) {
 
 void put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
                uint16_t code, int32_t value) {
-  struct input_event *buf;
-  buf = &ed->event_buffer[ed->event_buffer_end];
-  buf->time = *tv;
-  buf->type = type;
-  buf->code = code;
-  buf->value = value;
-  ++ed->event_buffer_end;
-  sem_post(&ed->event_buffer_sem);
+  if (ed->has_reader) {
+    struct input_event *buf;
+    buf = &ed->event_buffer[ed->event_buffer_end];
+    buf->time = *tv;
+    buf->type = type;
+    buf->code = code;
+    buf->value = value;
+    ++ed->event_buffer_end;
+    sem_post(&ed->event_buffer_sem);
+  }
 }
 
 struct synaptics_ew_state {
-  int x;
-  int y;
-  int z;
+  int32_t x;
+  int32_t y;
+  int32_t z;
+};
+
+struct synaptics_slot_state {
+  int32_t x;
+  int32_t y;
+  int32_t tracking_id;
 };
 
 struct psm_backend {
   int fd;
   mousehw_t hw_info;
   int guest_dev_fd;
+
+  // synaptics stuff
   synapticshw_t synaptics_info;
   struct synaptics_ew_state ews;
+  struct synaptics_slot_state ss0;
+  struct synaptics_slot_state ss1;
 };
 
 void set_bits_generic_ps2(struct event_device *ed) {
@@ -349,6 +386,30 @@ int synaptics_setup_abs_axes(struct event_device *ed, struct psm_backend *b,
   return 0;
 }
 
+int synaptics_get_mt_slot_data(struct event_device *ed,
+                               struct input_mt_request *mtr) {
+  struct psm_backend *b = ed->priv_ptr;
+
+  printf("get_mt_slot_data %u\n", mtr->code);
+  switch (mtr->code) {
+    case ABS_MT_POSITION_X:
+      mtr->values[0] = b->ss0.x;
+      mtr->values[1] = b->ss1.x;
+      break;
+    case ABS_MT_POSITION_Y:
+      mtr->values[0] = b->ss0.y;
+      mtr->values[1] = b->ss1.y;
+      break;
+    case ABS_MT_TRACKING_ID:
+      mtr->values[0] = b->ss0.tracking_id;
+      mtr->values[1] = b->ss1.tracking_id;
+      break;
+    default:
+      return CUSE_ERR_INVALID;
+  }
+  return 0;
+}
+
 int psm_backend_init(struct event_device *ed) {
   ed->priv_ptr = malloc(sizeof(struct psm_backend));
   if (!ed->priv_ptr)
@@ -379,6 +440,9 @@ int psm_backend_init(struct event_device *ed) {
       if (ioctl(b->fd, MOUSE_SYN_GETHWINFO, &b->synaptics_info) == -1)
         goto fail;
       b->ews.x = b->ews.y = b->ews.z = 0;
+      b->ss0.x = b->ss0.y = 0;
+      b->ss1.x = b->ss1.y = 0;
+      b->ss0.tracking_id = b->ss1.tracking_id = -1;
 
       printf("synaptics info:\n");
       printf("  capPalmDetect: %d\n", b->synaptics_info.capPalmDetect);
@@ -407,7 +471,7 @@ int psm_backend_init(struct event_device *ed) {
         set_bit(ed->key_bits, BTN_TOOL_TRIPLETAP);
       }
 
-      if (synaptics_setup_abs_axes(ed, b, ABS_X, ABS_Y)) 
+      if (synaptics_setup_abs_axes(ed, b, ABS_X, ABS_Y))
         goto fail;
 
       if (b->synaptics_info.capAdvancedGestures) {
@@ -421,6 +485,7 @@ int psm_backend_init(struct event_device *ed) {
         set_bit(ed->abs_bits, ABS_MT_TRACKING_ID);
         ed->abs_info[ABS_MT_TRACKING_ID].minimum = 0;
         ed->abs_info[ABS_MT_TRACKING_ID].maximum = 0xffff;
+        ed->get_mt_slot_data = synaptics_get_mt_slot_data;
       }
 
       set_bit(ed->abs_bits, ABS_PRESSURE);
@@ -508,11 +573,6 @@ void* psm_fill_function(struct event_device *ed) {
 
   while (read_full_packet(b->fd, packet, packetsize) == 0) {
     pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
-    if (!ed->has_reader && b->guest_dev_fd == -1) {
-      obuttons = 0;
-      pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
-      continue;
-    }
 
     switch (b->hw_info.model) {
       case MOUSE_MODEL_SYNAPTICS: {
@@ -535,8 +595,6 @@ void* psm_fill_function(struct event_device *ed) {
             synaptic_parse_ew_packet(ed, packet);
             break;
           }
-          if (!ed->has_reader)
-            break;
 
           int buttons = 0;
           if (packet[0] & 0x01)
@@ -573,7 +631,6 @@ void* psm_fill_function(struct event_device *ed) {
 
           struct timeval tv;
           gettimeofday(&tv, NULL); // XXX
-          struct input_event *buf;
 
           if ((buttons ^ obuttons) & (1 << 0))
             put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
@@ -588,29 +645,41 @@ void* psm_fill_function(struct event_device *ed) {
 
           if (b->synaptics_info.capAdvancedGestures) {
             if (no_fingers >= 2) {
+              b->ss0.x = MIN(x, b->ews.x);
+              b->ss0.y = synaptics_reverse_y(MIN(y, b->ews.y));
               put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 0);
-              if (!oslot0)
+              if (!oslot0) {
                 put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, ++tracking_ids);
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, MIN(x, b->ews.x));
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X,
-                        synaptics_reverse_y(MIN(y, b->ews.y)));
+                b->ss0.tracking_id = tracking_ids;
+              }
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, b->ss0.x);
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y, b->ss0.y);
+
+              b->ss1.x = MAX(x, b->ews.x);
+              b->ss1.y = synaptics_reverse_y(MAX(y, b->ews.y));
               put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 1);
-              if (!oslot1)
+              if (!oslot1) {
                 put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, ++tracking_ids);
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, MAX(x, b->ews.x));
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X,
-                        synaptics_reverse_y(MAX(y, b->ews.y)));
+                b->ss1.tracking_id = tracking_ids;
+              }
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, b->ss1.x);
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y, b->ss1.y);
+
               oslot0 = oslot1 = 1;
             } else if (no_fingers == 1) {
+              b->ss0.x = x;
+              b->ss0.y = synaptics_reverse_y(y);
               put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 0);
-              if (!oslot0)
+              if (!oslot0) {
                 put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, ++tracking_ids);
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, x);
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X,
-                        synaptics_reverse_y(y));
+                b->ss0.tracking_id = tracking_ids;
+              }
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, b->ss0.x);
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y, b->ss0.y);
               if (oslot1) {
                 put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 1);
                 put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, -1);
+                b->ss1.tracking_id = -1;
               }
               oslot0 = 1;
               oslot1 = 0;
@@ -618,10 +687,12 @@ void* psm_fill_function(struct event_device *ed) {
               if (oslot0) {
                 put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 0);
                 put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, -1);
+                b->ss0.tracking_id = -1;
               }
               if (oslot1) {
                 put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 1);
                 put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, -1);
+                b->ss1.tracking_id = -1;
               }
               oslot0 = oslot1 = 0;
             }
@@ -663,7 +734,6 @@ void* psm_fill_function(struct event_device *ed) {
 
           struct timeval tv;
           gettimeofday(&tv, NULL); // XXX
-          struct input_event *buf;
 
           if ((buttons ^ obuttons) & (1 << 0))
             put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
@@ -722,11 +792,6 @@ void* sysmouse_fill_function(struct event_device *ed) {
 
   while (read(b->fd, packet, sizeof(packet)) == sizeof(packet)) {
     pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
-    if (!ed->has_reader) {
-      obuttons = 0;
-      pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
-      continue;
-    }
 
     if (event_device_nr_free_buffer(ed) >= 8) {
       int buttons, dx, dy, dz, dw;
@@ -739,7 +804,6 @@ void* sysmouse_fill_function(struct event_device *ed) {
 
       struct timeval tv;
       gettimeofday(&tv, NULL); // XXX
-      struct input_event *buf;
 
       if ((buttons ^ obuttons) & MOUSE_SYS_BUTTON1UP)
         put_event(ed, &tv, EV_KEY, BTN_LEFT,
@@ -771,12 +835,13 @@ void* sysmouse_fill_function(struct event_device *ed) {
   return NULL;
 }
 
-void evdevfbsd_hup_catcher(int dummy) {}
+void evdevfbsd_hup_catcher(int dummy __unused) {}
 
-void *wait_and_proc(void *notused) {
+void *wait_and_proc(void *notused __unused) {
   int ret;
 
-  struct sigaction act = {0};
+  struct sigaction act;
+  memset(&act, 0, sizeof(act));
   act.sa_handler = &evdevfbsd_hup_catcher;
   sigaction(SIGHUP, &act, NULL); // XXX
 
@@ -848,7 +913,8 @@ int event_device_open_as_guest(struct event_device *ed,
   b->guest_dev_fd = fds[1];
   pthread_mutex_unlock(&parent->event_buffer_mutex); // XXX
 
-  if (pthread_create(&ed->fill_thread, NULL, psm_fill_function, ed) == 0)
+  if (pthread_create(&ed->fill_thread, NULL,
+                     (void *(*)(void *))psm_fill_function, ed) == 0)
     return 0;
 
 fail:
