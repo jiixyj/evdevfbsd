@@ -36,6 +36,7 @@ struct event_device {
   uint64_t rel_bits[256];
   uint64_t key_bits[256];
   uint64_t abs_bits[256];
+  uint64_t prop_bits[256];
   struct input_absinfo abs_info[ABS_MAX];
 };
 
@@ -225,6 +226,9 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags, unsigned long cmd,
     case EVIOCGSW(0):
       // printf("got ioctl EVIOCGSW %d\n", len);
       return 0;
+    case EVIOCGPROP(0):
+      return cuse_copy_out(ed->prop_bits, peer_data,
+                           MIN(sizeof(ed->prop_bits), len));
   }
 
   if ((cmd & IOC_DIRMASK) == IOC_OUT) {
@@ -384,6 +388,7 @@ int psm_backend_init(struct event_device *ed) {
       printf("  capEWmode: %d\n", b->synaptics_info.capEWmode);
       printf("  nExtendedQueries: %d\n", b->synaptics_info.nExtendedQueries);
 
+      set_bit(ed->prop_bits, INPUT_PROP_POINTER);
       set_bit(ed->event_bits, EV_ABS);
       set_bit(ed->event_bits, EV_KEY);
       set_bit(ed->key_bits, BTN_LEFT);
@@ -409,6 +414,7 @@ int psm_backend_init(struct event_device *ed) {
         if (synaptics_setup_abs_axes(ed, b, ABS_MT_POSITION_X,
                                      ABS_MT_POSITION_Y))
           goto fail;
+        set_bit(ed->prop_bits, INPUT_PROP_SEMI_MT);
         set_bit(ed->abs_bits, ABS_MT_SLOT);
         ed->abs_info[ABS_MT_SLOT].minimum = 0;
         ed->abs_info[ABS_MT_SLOT].maximum = 1;
@@ -425,6 +431,7 @@ int psm_backend_init(struct event_device *ed) {
         ed->abs_info[ABS_TOOL_WIDTH].minimum = 0;
         ed->abs_info[ABS_TOOL_WIDTH].maximum = 15;
       }
+
       break;
     case MOUSE_MODEL_TRACKPOINT:
       ed->device_name = "TPPS/2 IBM TrackPoint";
