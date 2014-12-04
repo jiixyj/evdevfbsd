@@ -531,7 +531,7 @@ static int psm_is_async(struct event_device *ed, unsigned char *buf) {
       return (buf[0] & 0xc8) != 0x80 || (buf[3] & 0xc8) != 0xc0;
     case MOUSE_MODEL_GENERIC:
     case MOUSE_MODEL_TRACKPOINT:
-      return (buf[0] & MOUSE_PS2_SYNCMASK) != MOUSE_PS2_SYNC;
+      return (buf[0] & MOUSE_PS2_SYNC) != MOUSE_PS2_SYNC;
     default:
       // assume sync
       return 0;
