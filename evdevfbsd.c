@@ -1,3 +1,4 @@
+#include <sys/consio.h>
 #include <sys/mouse.h>
 #include <sys/param.h>
 
@@ -296,6 +297,16 @@ static struct cuse_methods evdevfbsd_methods = {.cm_open = evdevfbsd_open,
 
 #define PACKET_MAX 32
 
+static int compare_times(struct timeval tv1, struct timeval tv2) {
+  tv1.tv_usec -= 500000;
+  if (tv1.tv_usec < 0) {
+    tv1.tv_usec += 1000000;
+    tv1.tv_sec -= 1;
+  }
+  return (tv1.tv_sec < tv2.tv_sec ||
+          (tv1.tv_sec == tv2.tv_sec && tv1.tv_usec <= tv2.tv_usec));
+}
+
 static void put_event(struct event_device *ed, struct timeval *tv,
                       uint16_t type, uint16_t code, int32_t value) {
   if (ed->is_open) {
@@ -308,6 +319,67 @@ static void put_event(struct event_device *ed, struct timeval *tv,
     ++ed->event_buffer_end;
     sem_post(&ed->event_buffer_sem);
   }
+
+  static pthread_mutex_t cons_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+  pthread_mutex_lock(&cons_mutex);
+
+  static struct mouse_data md;
+  static struct timeval last_left;
+  static int left_times;
+  static int cfd;
+  if (cfd == 0) {
+    cfd = open("/dev/consolectl", O_RDWR);
+  }
+  if (cfd == -1) {
+    pthread_mutex_unlock(&cons_mutex);
+    return;
+  }
+
+  if (type == EV_REL) {
+    if (code == REL_X)
+      md.x = value;
+    if (code == REL_Y)
+      md.y = value;
+  } else if (type == EV_KEY) {
+    struct mouse_info mi = ZERO_INITIALIZER;
+    mi.operation = MOUSE_BUTTON_EVENT;
+
+    if (code == BTN_LEFT) {
+      mi.u.event.id = (1 << 0);
+      mi.u.event.value = value;
+      if (value) {
+        if (compare_times(*tv, last_left)) {
+          left_times += 1;
+        } else {
+          left_times = 1;
+        }
+        last_left = *tv;
+        mi.u.event.value = left_times;
+      }
+    }
+    if (code == BTN_MIDDLE) {
+      mi.u.event.id = (1 << 1);
+      mi.u.event.value = value;
+    }
+    if (code == BTN_RIGHT) {
+      mi.u.event.id = (1 << 2);
+      mi.u.event.value = value;
+    }
+
+    if (ioctl(cfd, CONS_MOUSECTL, &mi) == -1)
+      perror("ioctl");
+  } else if (type == EV_SYN && (md.x || md.y)) {
+    struct mouse_info mi = ZERO_INITIALIZER;
+    mi.operation = MOUSE_MOTION_EVENT;
+    mi.u.data = md;
+    if (ioctl(cfd, CONS_MOUSECTL, &mi) == -1)
+      perror("ioctl");
+    struct mouse_data tmp = ZERO_INITIALIZER;
+    md = tmp;
+  }
+
+  pthread_mutex_unlock(&cons_mutex);
 }
 
 struct synaptics_ew_state {
