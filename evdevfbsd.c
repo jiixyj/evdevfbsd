@@ -182,8 +182,7 @@ static int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
       return cuse_copy_out(&version, peer_data, sizeof(version));
     }
     case EVIOCGRAB:
-      // Can be noop, event devices are always grabbed exclusively
-      printf("got ioctl EVIOCGRAB\n");
+      // Can be noop, event devices are always grabbed exclusively for now
       return 0;
     case EVIOCSCLOCKID: {
       int new_clock, ret;
@@ -431,41 +430,59 @@ static int synaptics_setup_abs_axes(struct event_device *ed,
                                     int y_axis) {
   set_bit(ed->abs_bits, x_axis);
   set_bit(ed->abs_bits, y_axis);
-  ed->abs_info[x_axis].minimum = 1472;
-  ed->abs_info[x_axis].maximum = 5472;
-  ed->abs_info[y_axis].minimum = 1408;
-  ed->abs_info[y_axis].maximum = 4448;
-  switch (b->synaptics_info.infoSensor) {
-    case 1:
-      ed->abs_info[x_axis].resolution = 85;
-      ed->abs_info[y_axis].resolution = 94;
-      break;
-    case 2:
-      ed->abs_info[x_axis].resolution = 91;
-      ed->abs_info[y_axis].resolution = 124;
-      break;
-    case 3:
-      ed->abs_info[x_axis].resolution = 57;
-      ed->abs_info[y_axis].resolution = 58;
-      break;
-    case 8:
-      ed->abs_info[x_axis].resolution = 85;
-      ed->abs_info[y_axis].resolution = 94;
-      break;
-    case 9:
-      ed->abs_info[x_axis].resolution = 73;
-      ed->abs_info[y_axis].resolution = 96;
-      break;
-    case 11:
-      ed->abs_info[x_axis].resolution = 187;
-      ed->abs_info[y_axis].resolution = 170;
-      break;
-    case 12:
-      ed->abs_info[x_axis].resolution = 122;
-      ed->abs_info[y_axis].resolution = 167;
-      break;
-    default:
-      return 1;
+  if (b->synaptics_info.minimumXCoord && b->synaptics_info.minimumYCoord) {
+    printf("has min limits\n");
+    ed->abs_info[x_axis].minimum = b->synaptics_info.minimumXCoord;
+    ed->abs_info[y_axis].minimum = b->synaptics_info.minimumYCoord;
+  } else {
+    ed->abs_info[x_axis].minimum = 1472;
+    ed->abs_info[y_axis].minimum = 1408;
+  }
+  if (b->synaptics_info.maximumXCoord && b->synaptics_info.maximumYCoord) {
+    printf("has max limits\n");
+    ed->abs_info[x_axis].maximum = b->synaptics_info.maximumXCoord;
+    ed->abs_info[y_axis].maximum = b->synaptics_info.maximumYCoord;
+  } else {
+    ed->abs_info[x_axis].maximum = 5472;
+    ed->abs_info[y_axis].maximum = 4448;
+  }
+  if (b->synaptics_info.infoXupmm && b->synaptics_info.infoYupmm) {
+    printf("has resolution info\n");
+    ed->abs_info[x_axis].resolution = b->synaptics_info.infoXupmm;
+    ed->abs_info[y_axis].resolution = b->synaptics_info.infoYupmm;
+  } else {
+    switch (b->synaptics_info.infoSensor) {
+      case 1:
+        ed->abs_info[x_axis].resolution = 85;
+        ed->abs_info[y_axis].resolution = 94;
+        break;
+      case 2:
+        ed->abs_info[x_axis].resolution = 91;
+        ed->abs_info[y_axis].resolution = 124;
+        break;
+      case 3:
+        ed->abs_info[x_axis].resolution = 57;
+        ed->abs_info[y_axis].resolution = 58;
+        break;
+      case 8:
+        ed->abs_info[x_axis].resolution = 85;
+        ed->abs_info[y_axis].resolution = 94;
+        break;
+      case 9:
+        ed->abs_info[x_axis].resolution = 73;
+        ed->abs_info[y_axis].resolution = 96;
+        break;
+      case 11:
+        ed->abs_info[x_axis].resolution = 187;
+        ed->abs_info[y_axis].resolution = 170;
+        break;
+      case 12:
+        ed->abs_info[x_axis].resolution = 122;
+        ed->abs_info[y_axis].resolution = 167;
+        break;
+      default:
+        return 1;
+    }
   }
   return 0;
 }
