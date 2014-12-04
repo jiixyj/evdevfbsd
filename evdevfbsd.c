@@ -296,18 +296,6 @@ struct cuse_methods evdevfbsd_methods = {.cm_open = evdevfbsd_open,
 
 #define PACKET_MAX 32
 
-int read_full_packet(int fd, unsigned char *buf, size_t siz) {
-  ssize_t ret;
-  while (siz) {
-    ret = read(fd, buf, siz);
-    if (ret <= 0)
-      return 1;
-    siz -= ret;
-    buf += ret;
-  }
-  return 0;
-}
-
 void put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
                uint16_t code, int32_t value) {
   if (ed->is_open) {
@@ -535,23 +523,49 @@ fail:
   return 1;
 }
 
+int check_psm_sync(struct event_device *ed, unsigned char *buf) {
+  struct psm_backend *b = ed->priv_ptr;
+
+  switch (b->hw_info.model) {
+    case MOUSE_MODEL_SYNAPTICS:
+      return (buf[0] & 0xc8) != 0x80 || (buf[3] & 0xc8) != 0xc0;
+    default:
+      // assume sync
+      return 0;
+  }
+}
+
+int read_full_packet(struct event_device *ed, int fd, unsigned char *buf,
+                     size_t siz) {
+  unsigned char *obuf = buf;
+  size_t osiz = siz;
+
+  ssize_t ret;
+  while (siz) {
+    ret = read(fd, buf, siz);
+    if (ret <= 0)
+      return 1;
+    siz -= ret;
+    buf += ret;
+  }
+
+  while (check_psm_sync(ed, obuf)) {
+    puts("syncing...");
+    memmove(obuf, obuf + 1, osiz - 1);
+    if (read(fd, obuf + osiz - 1, 1) != 1)
+      return 1;
+  }
+
+  return 0;
+}
+
 int write_full_packet(int fd, unsigned char* pkt, size_t siz) {
   ssize_t ret = write(fd, pkt, siz);
   if (ret == -1 && errno == EAGAIN)
     return 1;
-  if (ret == -1)
+  if (ret == -1 || ret != (ssize_t)siz)
     return -1;
 
-  pkt += ret;
-  siz -= ret;
-
-  while (siz) {
-    ret = write(fd, pkt, siz);
-    if (ret > 0) {
-      pkt += ret;
-      siz -= ret;
-    }
-  }
   return 0;
 }
 
@@ -588,7 +602,7 @@ void* psm_fill_function(struct event_device *ed) {
   uint16_t tracking_ids = 0;
   unsigned char packet[PACKET_MAX];
 
-  while (read_full_packet(b->fd, packet, packetsize) == 0) {
+  while (read_full_packet(ed, b->fd, packet, packetsize) == 0) {
     pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
 
     switch (b->hw_info.model) {
@@ -605,7 +619,10 @@ void* psm_fill_function(struct event_device *ed) {
             packet[1] = packet[4];
             packet[2] = packet[5];
             if (b->guest_dev_fd != -1) {
-              write_full_packet(b->guest_dev_fd, packet, 3);
+              if (write_full_packet(b->guest_dev_fd, packet, 3) == -1) {
+                pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
+                return NULL;
+              }
             }
             break;
           } else if (w == 2) {
