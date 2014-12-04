@@ -279,13 +279,13 @@ static int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
 
   if ((cmd & IOC_DIRMASK) == IOC_OUT) {
     if ((cmd & ~(unsigned long)ABS_MAX) == EVIOCGABS(0)) {
-      printf("got eviocgabs for axis %ld\n", cmd & ABS_MAX);
+      // printf("got eviocgabs for axis %ld\n", cmd & ABS_MAX);
       return cuse_copy_out(&ed->abs_info[cmd & ABS_MAX], peer_data,
                            (int)MIN(sizeof(struct input_absinfo), len));
     }
   }
 
-  printf("got ioctl %lu %lu %lu\n", cmd, base_cmd, len);
+  printf("got unknown ioctl %lu %lu %lu\n", cmd, base_cmd, len);
   return CUSE_ERR_INVALID;
 }
 
@@ -329,12 +329,16 @@ static void put_event(struct event_device *ed, struct timeval *tv,
   static int left_times;
   static int cfd;
   if (cfd == 0) {
-    cfd = open("/dev/consolectl", O_RDWR);
+    cfd = open("/dev/consolectl", O_RDWR, 0);
+    if (cfd != -1) {
+      system("for tty in /dev/ttyv*; do vidcontrol < $tty -m on; done");
+    }
   }
   if (cfd == -1) {
     pthread_mutex_unlock(&cons_mutex);
     return;
   }
+
 
   if (type == EV_REL) {
     if (code == REL_X)
@@ -470,7 +474,7 @@ static int synaptics_get_mt_slot_data(struct event_device *ed,
                                       struct input_mt_request *mtr) {
   struct psm_backend *b = ed->priv_ptr;
 
-  printf("get_mt_slot_data %u\n", mtr->code);
+  // printf("get_mt_slot_data %u\n", mtr->code);
   switch (mtr->code) {
     case ABS_MT_POSITION_X:
       mtr->values[0] = b->ss[0].x;
