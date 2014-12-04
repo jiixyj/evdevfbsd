@@ -48,6 +48,12 @@ struct event_device {
   uint64_t abs_bits[256];
   uint64_t prop_bits[256];
   struct input_absinfo abs_info[ABS_MAX];
+
+  uint16_t events_since_last_syn;
+  int32_t key_state[KEY_CNT];
+  int32_t abs_state[ABS_CNT];
+  int32_t current_mt_slot;
+  int32_t mt_state[16][ABS_CNT - ABS_MT_SLOT]; // 16 slots for now
 };
 
 static void get_clock_value(struct event_device *ed, struct timeval *tv) {
@@ -308,6 +314,37 @@ static int compare_times(struct timeval tv1, struct timeval tv2) {
 
 static void put_event(struct event_device *ed, struct timeval *tv,
                       uint16_t type, uint16_t code, int32_t value) {
+  if (type == EV_KEY) {
+    if (ed->key_state[code] == value)
+      return;
+    else
+      ed->key_state[code] = value;
+  } else if (type == EV_ABS && code < ABS_MT_SLOT) {
+    if (ed->abs_state[code] == value)
+      return;
+    else
+      ed->abs_state[code] = value;
+  } else if (type == EV_ABS && code > ABS_MT_SLOT) {
+    if (ed->current_mt_slot == -1) {
+      // error
+      return;
+    }
+    if (ed->mt_state[ed->current_mt_slot][code - ABS_MT_SLOT - 1] == value)
+      return;
+    else
+      ed->mt_state[ed->current_mt_slot][code - ABS_MT_SLOT - 1] = value;
+  } else if (type == EV_SYN) {
+    if (ed->events_since_last_syn == 0)
+      return;
+  }
+
+  if (code == ABS_MT_SLOT) {
+    if (ed->current_mt_slot == value)
+      return;
+    else
+      ed->current_mt_slot = value;
+  }
+
   if (ed->is_open) {
     struct input_event *buf;
     buf = &ed->event_buffer[ed->event_buffer_end];
@@ -317,6 +354,12 @@ static void put_event(struct event_device *ed, struct timeval *tv,
     buf->value = value;
     ++ed->event_buffer_end;
     sem_post(&ed->event_buffer_sem);
+  }
+
+  if (type == EV_SYN) {
+    ed->events_since_last_syn = 0;
+  } else {
+    ed->events_since_last_syn++;
   }
 
   static pthread_mutex_t cons_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -431,7 +474,6 @@ static int synaptics_setup_abs_axes(struct event_device *ed,
   set_bit(ed->abs_bits, x_axis);
   set_bit(ed->abs_bits, y_axis);
   if (b->synaptics_info.minimumXCoord && b->synaptics_info.minimumYCoord) {
-    printf("has min limits\n");
     ed->abs_info[x_axis].minimum = b->synaptics_info.minimumXCoord;
     ed->abs_info[y_axis].minimum = b->synaptics_info.minimumYCoord;
   } else {
@@ -439,7 +481,6 @@ static int synaptics_setup_abs_axes(struct event_device *ed,
     ed->abs_info[y_axis].minimum = 1408;
   }
   if (b->synaptics_info.maximumXCoord && b->synaptics_info.maximumYCoord) {
-    printf("has max limits\n");
     ed->abs_info[x_axis].maximum = b->synaptics_info.maximumXCoord;
     ed->abs_info[y_axis].maximum = b->synaptics_info.maximumYCoord;
   } else {
@@ -447,7 +488,6 @@ static int synaptics_setup_abs_axes(struct event_device *ed,
     ed->abs_info[y_axis].maximum = 4448;
   }
   if (b->synaptics_info.infoXupmm && b->synaptics_info.infoYupmm) {
-    printf("has resolution info\n");
     ed->abs_info[x_axis].resolution = b->synaptics_info.infoXupmm;
     ed->abs_info[y_axis].resolution = b->synaptics_info.infoYupmm;
   } else {
@@ -763,16 +803,11 @@ static void *psm_fill_function(struct event_device *ed) {
           struct timeval tv;
           get_clock_value(ed, &tv);
 
-          if ((buttons ^ obuttons) & (1 << 0))
-            put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
-          if ((buttons ^ obuttons) & (1 << 1))
-            put_event(ed, &tv, EV_KEY, BTN_RIGHT, !!(buttons & (1 << 1)));
-          if ((buttons ^ obuttons) & (1 << 2))
-            put_event(ed, &tv, EV_KEY, BTN_MIDDLE, !!(buttons & (1 << 2)));
-          if ((buttons ^ obuttons) & (1 << 5))
-            put_event(ed, &tv, EV_KEY, BTN_FORWARD, !!(buttons & (1 << 5)));
-          if ((buttons ^ obuttons) & (1 << 6))
-            put_event(ed, &tv, EV_KEY, BTN_BACK, !!(buttons & (1 << 6)));
+          put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
+          put_event(ed, &tv, EV_KEY, BTN_RIGHT, !!(buttons & (1 << 1)));
+          put_event(ed, &tv, EV_KEY, BTN_MIDDLE, !!(buttons & (1 << 2)));
+          put_event(ed, &tv, EV_KEY, BTN_FORWARD, !!(buttons & (1 << 5)));
+          put_event(ed, &tv, EV_KEY, BTN_BACK, !!(buttons & (1 << 6)));
 
           if (b->synaptics_info.capAdvancedGestures) {
             if (no_fingers >= 2) {
@@ -861,12 +896,9 @@ static void *psm_fill_function(struct event_device *ed) {
           struct timeval tv;
           get_clock_value(ed, &tv);
 
-          if ((buttons ^ obuttons) & (1 << 0))
-            put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
-          if ((buttons ^ obuttons) & (1 << 1))
-            put_event(ed, &tv, EV_KEY, BTN_RIGHT, !!(buttons & (1 << 1)));
-          if ((buttons ^ obuttons) & (1 << 2))
-            put_event(ed, &tv, EV_KEY, BTN_MIDDLE, !!(buttons & (1 << 2)));
+          put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
+          put_event(ed, &tv, EV_KEY, BTN_RIGHT, !!(buttons & (1 << 1)));
+          put_event(ed, &tv, EV_KEY, BTN_MIDDLE, !!(buttons & (1 << 2)));
 
           if (x)
             put_event(ed, &tv, EV_REL, REL_X, x);
@@ -931,15 +963,10 @@ static void *sysmouse_fill_function(struct event_device *ed) {
       struct timeval tv;
       get_clock_value(ed, &tv);
 
-      if ((buttons ^ obuttons) & MOUSE_SYS_BUTTON1UP)
-        put_event(ed, &tv, EV_KEY, BTN_LEFT,
-                  !!(buttons & MOUSE_SYS_BUTTON1UP));
-      if ((buttons ^ obuttons) & MOUSE_SYS_BUTTON2UP)
-        put_event(ed, &tv, EV_KEY, BTN_MIDDLE,
-                  !!(buttons & MOUSE_SYS_BUTTON2UP));
-      if ((buttons ^ obuttons) & MOUSE_SYS_BUTTON3UP)
-        put_event(ed, &tv, EV_KEY, BTN_RIGHT,
-                  !!(buttons & MOUSE_SYS_BUTTON3UP));
+      put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & MOUSE_SYS_BUTTON1UP));
+      put_event(ed, &tv, EV_KEY, BTN_MIDDLE,
+                !!(buttons & MOUSE_SYS_BUTTON2UP));
+      put_event(ed, &tv, EV_KEY, BTN_RIGHT, !!(buttons & MOUSE_SYS_BUTTON3UP));
 
       if (dx)
         put_event(ed, &tv, EV_REL, REL_X, dx);
@@ -984,6 +1011,7 @@ static int event_device_init(struct event_device *ed) {
   ed->fd = -1;
   ed->event_buffer_end = 0;
   ed->clock = CLOCK_REALTIME;
+  ed->current_mt_slot = -1;
   return pthread_mutex_init(&ed->event_buffer_mutex, NULL) ||
          sem_init(&ed->event_buffer_sem, 0, 0);
 }
