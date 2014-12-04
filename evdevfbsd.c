@@ -523,12 +523,15 @@ fail:
   return 1;
 }
 
-int check_psm_sync(struct event_device *ed, unsigned char *buf) {
+int is_psm_async(struct event_device *ed, unsigned char *buf) {
   struct psm_backend *b = ed->priv_ptr;
 
   switch (b->hw_info.model) {
     case MOUSE_MODEL_SYNAPTICS:
       return (buf[0] & 0xc8) != 0x80 || (buf[3] & 0xc8) != 0xc0;
+    case MOUSE_MODEL_GENERIC:
+    case MOUSE_MODEL_TRACKPOINT:
+      return (buf[0] & MOUSE_PS2_SYNCMASK) != MOUSE_PS2_SYNC;
     default:
       // assume sync
       return 0;
@@ -549,7 +552,7 @@ int read_full_packet(struct event_device *ed, int fd, unsigned char *buf,
     buf += ret;
   }
 
-  while (check_psm_sync(ed, obuf)) {
+  while (is_psm_async(ed, obuf)) {
     puts("syncing...");
     memmove(obuf, obuf + 1, osiz - 1);
     if (read(fd, obuf + osiz - 1, 1) != 1)
