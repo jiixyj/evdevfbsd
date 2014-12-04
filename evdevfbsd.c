@@ -49,7 +49,7 @@ struct event_device {
   struct input_absinfo abs_info[ABS_MAX];
 };
 
-void get_clock_value(struct event_device *ed, struct timeval *tv) {
+static void get_clock_value(struct event_device *ed, struct timeval *tv) {
   struct timespec ts;
   clock_gettime(ed->clock, &ts); // XXX
   struct bintime bt;
@@ -57,11 +57,11 @@ void get_clock_value(struct event_device *ed, struct timeval *tv) {
   bintime2timeval(&bt, tv);
 }
 
-int event_device_nr_free_buffer(struct event_device* ed) {
+static int event_device_nr_free_buffer(struct event_device* ed) {
   return EVENT_BUFFER_SIZE - ed->event_buffer_end;
 }
 
-int evdevfbsd_open(struct cuse_dev *cdev, int fflags __unused) {
+static int evdevfbsd_open(struct cuse_dev *cdev, int fflags __unused) {
   // puts("device opened");
   struct event_device *ed = cuse_dev_get_priv0(cdev);
 
@@ -77,8 +77,7 @@ int evdevfbsd_open(struct cuse_dev *cdev, int fflags __unused) {
   return ret;
 }
 
-int evdevfbsd_close(struct cuse_dev *cdev, int fflags __unused) {
-  // puts("device closed");
+static int evdevfbsd_close(struct cuse_dev *cdev, int fflags __unused) {
   struct event_device *ed = cuse_dev_get_priv0(cdev);
 
   pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
@@ -90,16 +89,16 @@ int evdevfbsd_close(struct cuse_dev *cdev, int fflags __unused) {
   return CUSE_ERR_NONE;
 }
 
-int evdevfbsd_read(struct cuse_dev *cdev, int fflags __unused, void *user_ptr,
-                   int len) {
+static int evdevfbsd_read(struct cuse_dev *cdev, int fflags, void *user_ptr,
+                          int len) {
   if (len < 0)
     return CUSE_ERR_INVALID;
 
   if (len < (int)sizeof(struct input_event))
     return CUSE_ERR_INVALID;
 
-  int requested_events = len / sizeof(struct input_event);
-  int nr_events;
+  int requested_events = len / (int)sizeof(struct input_event);
+  int nr_events = 0;
 
   struct event_device* ed = cuse_dev_get_priv0(cdev);
   int ret;
@@ -123,10 +122,11 @@ retry:
   } else {
     nr_events = MIN(requested_events, ed->event_buffer_end);
     ret = cuse_copy_out(ed->event_buffer, user_ptr,
-                        nr_events * sizeof(struct input_event));
+                        nr_events * (int)sizeof(struct input_event));
     if (ret == 0) {
       memmove(ed->event_buffer, &ed->event_buffer[nr_events],
-              (ed->event_buffer_end - nr_events) * sizeof(struct input_event));
+              (size_t)(ed->event_buffer_end - nr_events) *
+                  sizeof(struct input_event));
       ed->event_buffer_end = ed->event_buffer_end - nr_events;
       for (int i = 0; i < nr_events - 1; ++i)
         sem_wait(&ed->event_buffer_sem);
@@ -134,11 +134,11 @@ retry:
   }
   pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
 
-  return ret == 0 ? nr_events * sizeof(struct input_event) : ret;
+  return ret == 0 ? nr_events * (int)sizeof(struct input_event) : ret;
 }
 
 
-int evdevfbsd_poll(struct cuse_dev *cdev, int fflags __unused, int events) {
+static int evdevfbsd_poll(struct cuse_dev *cdev, int fflags __unused, int events) {
   if (!(events & CUSE_POLL_READ))
     return CUSE_POLL_NONE;
 
@@ -153,11 +153,11 @@ int evdevfbsd_poll(struct cuse_dev *cdev, int fflags __unused, int events) {
   return ret;
 }
 
-void set_bit(uint64_t *array, int bit) {
+static void set_bit(uint64_t *array, int bit) {
   array[bit / 64] |= (1LL << (bit % 64));
 }
 
-int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
+static int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
                     unsigned long cmd, void *peer_data) {
   uint64_t bits[256];
   struct event_device* ed = cuse_dev_get_priv0(cdev);
@@ -204,13 +204,13 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
     case EVIOCGBIT(0, 0): {
       // printf("got ioctl EVIOCGBIT %d\n", len);
       return cuse_copy_out(ed->event_bits, peer_data,
-                           MIN(sizeof(ed->event_bits), len));
+                           (int)MIN(sizeof(ed->event_bits), len));
     }
     case EVIOCGNAME(0): {
       // printf("got ioctl EVIOCGNAME %d\n", len);
       if (ed->device_name) {
         return cuse_copy_out(ed->device_name, peer_data,
-                             MIN(strlen(ed->device_name), len));
+                             (int)MIN(strlen(ed->device_name), len));
       } else {
         return 0;
       }
@@ -226,17 +226,17 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
     case EVIOCGBIT(EV_REL, 0): {
       // printf("got ioctl EVIOCGBIT %d\n", len);
       return cuse_copy_out(ed->rel_bits, peer_data,
-                           MIN(sizeof(ed->rel_bits), len));
+                           (int)MIN(sizeof(ed->rel_bits), len));
     }
     case EVIOCGBIT(EV_KEY, 0): {
       // printf("got ioctl EVIOCGBIT %d\n", len);
       return cuse_copy_out(ed->key_bits, peer_data,
-                           MIN(sizeof(ed->key_bits), len));
+                           (int)MIN(sizeof(ed->key_bits), len));
     }
     case EVIOCGBIT(EV_ABS, 0): {
       // printf("got ioctl EVIOCGBIT %d\n", len);
       return cuse_copy_out(ed->abs_bits, peer_data,
-                           MIN(sizeof(ed->abs_bits), len));
+                           (int)MIN(sizeof(ed->abs_bits), len));
     }
     case EVIOCGBIT(EV_LED, 0):
     case EVIOCGBIT(EV_SW, 0):
@@ -245,7 +245,7 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
     case EVIOCGBIT(EV_SND, 0):
       // printf("got ioctl EVIOCGBIT %d\n", len);
       memset(bits, 0, sizeof(bits));
-      return cuse_copy_out(bits, peer_data, MIN(sizeof(bits), len));
+      return cuse_copy_out(bits, peer_data, (int)MIN(sizeof(bits), len));
     case EVIOCGKEY(0):
       // printf("got ioctl EVIOCGKEY %d\n", len);
       return 0;
@@ -257,7 +257,7 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
       return 0;
     case EVIOCGPROP(0):
       return cuse_copy_out(ed->prop_bits, peer_data,
-                           MIN(sizeof(ed->prop_bits), len));
+                           (int)MIN(sizeof(ed->prop_bits), len));
     case EVIOCGMTSLOTS(0): {
       if (ed->get_mt_slot_data) {
         int ret;
@@ -269,7 +269,7 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
         if ((ret = ed->get_mt_slot_data(ed, &mtr)))
           return ret;
         return cuse_copy_out(&mtr, peer_data,
-                             MIN(sizeof(struct input_mt_request), len));
+                             (int)MIN(sizeof(struct input_mt_request), len));
       } else {
         return CUSE_ERR_INVALID;
       }
@@ -277,10 +277,10 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
   }
 
   if ((cmd & IOC_DIRMASK) == IOC_OUT) {
-    if ((cmd & ~ABS_MAX) == EVIOCGABS(0)) {
+    if ((cmd & ~(unsigned long)ABS_MAX) == EVIOCGABS(0)) {
       printf("got eviocgabs for axis %ld\n", cmd & ABS_MAX);
       return cuse_copy_out(&ed->abs_info[cmd & ABS_MAX], peer_data,
-                           MIN(sizeof(struct input_absinfo), len));
+                           (int)MIN(sizeof(struct input_absinfo), len));
     }
   }
 
@@ -288,7 +288,7 @@ int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
   return CUSE_ERR_INVALID;
 }
 
-struct cuse_methods evdevfbsd_methods = {.cm_open = evdevfbsd_open,
+static struct cuse_methods evdevfbsd_methods = {.cm_open = evdevfbsd_open,
                                          .cm_close = evdevfbsd_close,
                                          .cm_read = evdevfbsd_read,
                                          .cm_poll = evdevfbsd_poll,
@@ -296,7 +296,7 @@ struct cuse_methods evdevfbsd_methods = {.cm_open = evdevfbsd_open,
 
 #define PACKET_MAX 32
 
-void put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
+static void put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
                uint16_t code, int32_t value) {
   if (ed->is_open) {
     struct input_event *buf;
@@ -333,7 +333,7 @@ struct psm_backend {
   struct synaptics_slot_state ss[2];
 };
 
-void set_bits_generic_ps2(struct event_device *ed) {
+static void set_bits_generic_ps2(struct event_device *ed) {
   set_bit(ed->event_bits, EV_REL);
   set_bit(ed->event_bits, EV_KEY);
   set_bit(ed->key_bits, BTN_LEFT);
@@ -343,14 +343,14 @@ void set_bits_generic_ps2(struct event_device *ed) {
   set_bit(ed->rel_bits, REL_Y);
 }
 
-int32_t synaptics_reverse_y(int32_t y) {
+static int32_t synaptics_reverse_y(int32_t y) {
   y -= 2928;
   y = -y;
   y += 2928;
   return y;
 }
 
-int synaptics_setup_abs_axes(struct event_device *ed, struct psm_backend *b,
+static int synaptics_setup_abs_axes(struct event_device *ed, struct psm_backend *b,
                              int x_axis, int y_axis) {
   set_bit(ed->abs_bits, x_axis);
   set_bit(ed->abs_bits, y_axis);
@@ -393,7 +393,7 @@ int synaptics_setup_abs_axes(struct event_device *ed, struct psm_backend *b,
   return 0;
 }
 
-int synaptics_get_mt_slot_data(struct event_device *ed,
+static int synaptics_get_mt_slot_data(struct event_device *ed,
                                struct input_mt_request *mtr) {
   struct psm_backend *b = ed->priv_ptr;
 
@@ -417,7 +417,7 @@ int synaptics_get_mt_slot_data(struct event_device *ed,
   return 0;
 }
 
-int psm_backend_init(struct event_device *ed) {
+static int psm_backend_init(struct event_device *ed) {
   ed->priv_ptr = malloc(sizeof(struct psm_backend));
   if (!ed->priv_ptr)
     return 1;
@@ -523,7 +523,7 @@ fail:
   return 1;
 }
 
-int is_psm_async(struct event_device *ed, unsigned char *buf) {
+static int psm_is_async(struct event_device *ed, unsigned char *buf) {
   struct psm_backend *b = ed->priv_ptr;
 
   switch (b->hw_info.model) {
@@ -538,7 +538,7 @@ int is_psm_async(struct event_device *ed, unsigned char *buf) {
   }
 }
 
-int read_full_packet(struct event_device *ed, int fd, unsigned char *buf,
+static int psm_read_full_packet(struct event_device *ed, int fd, unsigned char *buf,
                      size_t siz) {
   unsigned char *obuf = buf;
   size_t osiz = siz;
@@ -548,11 +548,11 @@ int read_full_packet(struct event_device *ed, int fd, unsigned char *buf,
     ret = read(fd, buf, siz);
     if (ret <= 0)
       return 1;
-    siz -= ret;
-    buf += ret;
+    siz -= (size_t)ret;
+    buf += (size_t)ret;
   }
 
-  while (is_psm_async(ed, obuf)) {
+  while (psm_is_async(ed, obuf)) {
     puts("syncing...");
     memmove(obuf, obuf + 1, osiz - 1);
     if (read(fd, obuf + osiz - 1, 1) != 1)
@@ -562,7 +562,7 @@ int read_full_packet(struct event_device *ed, int fd, unsigned char *buf,
   return 0;
 }
 
-int write_full_packet(int fd, unsigned char* pkt, size_t siz) {
+static int write_full_packet(int fd, unsigned char* pkt, size_t siz) {
   ssize_t ret = write(fd, pkt, siz);
   if (ret == -1 && errno == EAGAIN)
     return 1;
@@ -572,7 +572,7 @@ int write_full_packet(int fd, unsigned char* pkt, size_t siz) {
   return 0;
 }
 
-void synaptic_parse_ew_packet(struct event_device *ed, unsigned char *packet) {
+static void synaptic_parse_ew_packet(struct event_device *ed, unsigned char *packet) {
   struct psm_backend *b = ed->priv_ptr;
 
   int ew_packet_code = (packet[5] & 0xf0) >> 4;
@@ -588,7 +588,7 @@ void synaptic_parse_ew_packet(struct event_device *ed, unsigned char *packet) {
   }
 }
 
-void* psm_fill_function(struct event_device *ed) {
+static void* psm_fill_function(struct event_device *ed) {
   struct psm_backend *b = ed->priv_ptr;
 
   size_t packetsize = MOUSE_PS2_PACKETSIZE;
@@ -605,7 +605,7 @@ void* psm_fill_function(struct event_device *ed) {
   uint16_t tracking_ids = 0;
   unsigned char packet[PACKET_MAX];
 
-  while (read_full_packet(ed, b->fd, packet, packetsize) == 0) {
+  while (psm_read_full_packet(ed, b->fd, packet, packetsize) == 0) {
     pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
 
     switch (b->hw_info.model) {
@@ -796,7 +796,7 @@ struct sysmouse_backend {
   int fd;
 };
 
-int sysmouse_backend_init(struct event_device *ed) {
+static int sysmouse_backend_init(struct event_device *ed) {
   ed->priv_ptr = malloc(sizeof(struct sysmouse_backend));
   if (!ed->priv_ptr)
     return 1;
@@ -817,7 +817,7 @@ fail:
   return 1;
 }
 
-void* sysmouse_fill_function(struct event_device *ed) {
+static void* sysmouse_fill_function(struct event_device *ed) {
   struct sysmouse_backend *b = ed->priv_ptr;
   int obuttons = 0;
   unsigned char packet[19];
@@ -867,9 +867,9 @@ void* sysmouse_fill_function(struct event_device *ed) {
   return NULL;
 }
 
-void evdevfbsd_hup_catcher(int dummy __unused) {}
+static void evdevfbsd_hup_catcher(int dummy __unused) {}
 
-void *wait_and_proc(void *notused __unused) {
+static void *wait_and_proc(void *notused __unused) {
   int ret;
 
   struct sigaction act;
@@ -885,7 +885,7 @@ void *wait_and_proc(void *notused __unused) {
   return NULL;
 }
 
-int event_device_init(struct event_device* ed) {
+static int event_device_init(struct event_device* ed) {
   memset(ed, 0, sizeof(*ed));
   ed->fd = -1;
   ed->event_buffer_end = 0;
@@ -894,7 +894,7 @@ int event_device_init(struct event_device* ed) {
          sem_init(&ed->event_buffer_sem, 0, 0);
 }
 
-int event_device_open(struct event_device *ed, char const *path) {
+static int event_device_open(struct event_device *ed, char const *path) {
   void *(*fill_function)(void *);
 
   if (!strcmp(path, "/dev/bpsm0")) {
@@ -910,7 +910,7 @@ int event_device_open(struct event_device *ed, char const *path) {
   return pthread_create(&ed->fill_thread, NULL, fill_function, ed);
 }
 
-int event_device_open_as_guest(struct event_device *ed,
+static int event_device_open_as_guest(struct event_device *ed,
                                struct event_device *parent) {
   ed->priv_ptr = malloc(sizeof(struct psm_backend));
   if (!ed->priv_ptr)
