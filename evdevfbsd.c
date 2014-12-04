@@ -30,17 +30,17 @@ struct input_mt_request {
 struct event_device {
   int fd;
   struct input_event event_buffer[EVENT_BUFFER_SIZE];
-  int event_buffer_end;   /* index at which to write next event */
+  int event_buffer_end; /* index at which to write next event */
   pthread_mutex_t event_buffer_mutex;
   sem_t event_buffer_sem;
   pthread_t fill_thread;
   bool is_open;
   int clock;
-  void* priv_ptr;
-  int(*get_mt_slot_data)(struct event_device *, struct input_mt_request *);
+  void *priv_ptr;
+  int (*get_mt_slot_data)(struct event_device *, struct input_mt_request *);
 
   struct input_id iid;
-  char const* device_name;
+  char const *device_name;
   uint64_t event_bits[256];
   uint64_t rel_bits[256];
   uint64_t key_bits[256];
@@ -57,7 +57,7 @@ static void get_clock_value(struct event_device *ed, struct timeval *tv) {
   bintime2timeval(&bt, tv);
 }
 
-static int event_device_nr_free_buffer(struct event_device* ed) {
+static int event_device_nr_free_buffer(struct event_device *ed) {
   return EVENT_BUFFER_SIZE - ed->event_buffer_end;
 }
 
@@ -100,7 +100,7 @@ static int evdevfbsd_read(struct cuse_dev *cdev, int fflags, void *user_ptr,
   int requested_events = len / (int)sizeof(struct input_event);
   int nr_events = 0;
 
-  struct event_device* ed = cuse_dev_get_priv0(cdev);
+  struct event_device *ed = cuse_dev_get_priv0(cdev);
   int ret;
 
 retry:
@@ -137,13 +137,13 @@ retry:
   return ret == 0 ? nr_events * (int)sizeof(struct input_event) : ret;
 }
 
-
-static int evdevfbsd_poll(struct cuse_dev *cdev, int fflags __unused, int events) {
+static int evdevfbsd_poll(struct cuse_dev *cdev, int fflags __unused,
+                          int events) {
   if (!(events & CUSE_POLL_READ))
     return CUSE_POLL_NONE;
 
   int ret = CUSE_POLL_NONE;
-  struct event_device* ed = cuse_dev_get_priv0(cdev);
+  struct event_device *ed = cuse_dev_get_priv0(cdev);
 
   pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
   if (ed->event_buffer_end > 0)
@@ -158,9 +158,9 @@ static void set_bit(uint64_t *array, int bit) {
 }
 
 static int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
-                    unsigned long cmd, void *peer_data) {
+                           unsigned long cmd, void *peer_data) {
   uint64_t bits[256];
-  struct event_device* ed = cuse_dev_get_priv0(cdev);
+  struct event_device *ed = cuse_dev_get_priv0(cdev);
 
   switch (cmd) {
     case TIOCFLUSH:
@@ -289,15 +289,15 @@ static int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
 }
 
 static struct cuse_methods evdevfbsd_methods = {.cm_open = evdevfbsd_open,
-                                         .cm_close = evdevfbsd_close,
-                                         .cm_read = evdevfbsd_read,
-                                         .cm_poll = evdevfbsd_poll,
-                                         .cm_ioctl = evdevfbsd_ioctl};
+                                                .cm_close = evdevfbsd_close,
+                                                .cm_read = evdevfbsd_read,
+                                                .cm_poll = evdevfbsd_poll,
+                                                .cm_ioctl = evdevfbsd_ioctl};
 
 #define PACKET_MAX 32
 
-static void put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
-               uint16_t code, int32_t value) {
+static void put_event(struct event_device *ed, struct timeval *tv,
+                      uint16_t type, uint16_t code, int32_t value) {
   if (ed->is_open) {
     struct input_event *buf;
     buf = &ed->event_buffer[ed->event_buffer_end];
@@ -350,8 +350,9 @@ static int32_t synaptics_reverse_y(int32_t y) {
   return y;
 }
 
-static int synaptics_setup_abs_axes(struct event_device *ed, struct psm_backend *b,
-                             int x_axis, int y_axis) {
+static int synaptics_setup_abs_axes(struct event_device *ed,
+                                    struct psm_backend *b, int x_axis,
+                                    int y_axis) {
   set_bit(ed->abs_bits, x_axis);
   set_bit(ed->abs_bits, y_axis);
   ed->abs_info[x_axis].minimum = 1472;
@@ -394,7 +395,7 @@ static int synaptics_setup_abs_axes(struct event_device *ed, struct psm_backend 
 }
 
 static int synaptics_get_mt_slot_data(struct event_device *ed,
-                               struct input_mt_request *mtr) {
+                                      struct input_mt_request *mtr) {
   struct psm_backend *b = ed->priv_ptr;
 
   printf("get_mt_slot_data %u\n", mtr->code);
@@ -434,7 +435,6 @@ static int psm_backend_init(struct event_device *ed) {
 
   if (ioctl(b->fd, MOUSE_GETHWINFO, &b->hw_info) == -1)
     goto fail;
-
 
   ed->iid.bustype = BUS_I8042;
   ed->iid.vendor = 0x02;
@@ -512,7 +512,7 @@ static int psm_backend_init(struct event_device *ed) {
       break;
     case MOUSE_MODEL_GENERIC:
       ed->device_name = "Generic Mouse"; // XXX not sure
-      ed->iid.product = PSMOUSE_PS2; // XXX not sure
+      ed->iid.product = PSMOUSE_PS2;     // XXX not sure
       set_bits_generic_ps2(ed);
       break;
   }
@@ -538,8 +538,8 @@ static int psm_is_async(struct event_device *ed, unsigned char *buf) {
   }
 }
 
-static int psm_read_full_packet(struct event_device *ed, int fd, unsigned char *buf,
-                     size_t siz) {
+static int psm_read_full_packet(struct event_device *ed, int fd,
+                                unsigned char *buf, size_t siz) {
   unsigned char *obuf = buf;
   size_t osiz = siz;
 
@@ -562,7 +562,7 @@ static int psm_read_full_packet(struct event_device *ed, int fd, unsigned char *
   return 0;
 }
 
-static int write_full_packet(int fd, unsigned char* pkt, size_t siz) {
+static int write_full_packet(int fd, unsigned char *pkt, size_t siz) {
   ssize_t ret = write(fd, pkt, siz);
   if (ret == -1 && errno == EAGAIN)
     return 1;
@@ -572,7 +572,8 @@ static int write_full_packet(int fd, unsigned char* pkt, size_t siz) {
   return 0;
 }
 
-static void synaptic_parse_ew_packet(struct event_device *ed, unsigned char *packet) {
+static void synaptic_parse_ew_packet(struct event_device *ed,
+                                     unsigned char *packet) {
   struct psm_backend *b = ed->priv_ptr;
 
   int ew_packet_code = (packet[5] & 0xf0) >> 4;
@@ -588,7 +589,7 @@ static void synaptic_parse_ew_packet(struct event_device *ed, unsigned char *pac
   }
 }
 
-static void* psm_fill_function(struct event_device *ed) {
+static void *psm_fill_function(struct event_device *ed) {
   struct psm_backend *b = ed->priv_ptr;
 
   size_t packetsize = MOUSE_PS2_PACKETSIZE;
@@ -817,7 +818,7 @@ fail:
   return 1;
 }
 
-static void* sysmouse_fill_function(struct event_device *ed) {
+static void *sysmouse_fill_function(struct event_device *ed) {
   struct sysmouse_backend *b = ed->priv_ptr;
   int obuttons = 0;
   unsigned char packet[19];
@@ -885,7 +886,7 @@ static void *wait_and_proc(void *notused __unused) {
   return NULL;
 }
 
-static int event_device_init(struct event_device* ed) {
+static int event_device_init(struct event_device *ed) {
   memset(ed, 0, sizeof(*ed));
   ed->fd = -1;
   ed->event_buffer_end = 0;
@@ -899,10 +900,10 @@ static int event_device_open(struct event_device *ed, char const *path) {
 
   if (!strcmp(path, "/dev/bpsm0")) {
     psm_backend_init(ed);
-    fill_function = (void *(*)(void *)) psm_fill_function;
+    fill_function = (void *(*)(void *))psm_fill_function;
   } else if (!strcmp(path, "/dev/sysmouse")) {
     sysmouse_backend_init(ed);
-    fill_function = (void *(*)(void *)) sysmouse_fill_function;
+    fill_function = (void *(*)(void *))sysmouse_fill_function;
   } else {
     return -EINVAL;
   }
@@ -911,7 +912,7 @@ static int event_device_open(struct event_device *ed, char const *path) {
 }
 
 static int event_device_open_as_guest(struct event_device *ed,
-                               struct event_device *parent) {
+                                      struct event_device *parent) {
   ed->priv_ptr = malloc(sizeof(struct psm_backend));
   if (!ed->priv_ptr)
     return 1;
@@ -968,11 +969,11 @@ int main() {
     errx(1, "cuse_init returned %d", ret);
 
   struct event_device ed;
-  event_device_init(&ed); // XXX
+  event_device_init(&ed);               // XXX
   event_device_open(&ed, "/dev/bpsm0"); // XXX
 
   struct event_device ed_guest;
-  event_device_init(&ed_guest); // XXX
+  event_device_init(&ed_guest);               // XXX
   event_device_open_as_guest(&ed_guest, &ed); // XXX
 
   {
