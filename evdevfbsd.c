@@ -1078,6 +1078,24 @@ fail:
   return 1;
 }
 
+static int create_cuse_device(struct event_device *ed) {
+  char device_name[32] = ZERO_INITIALIZER;
+  for (int i = 0; i < 32; ++i) {
+    if (snprintf(device_name, sizeof(device_name), "/dev/input/event%d", i) ==
+        -1)
+      errx(1, "snprintf failed");
+    if (access(device_name, F_OK))
+      break;
+  }
+
+  struct cuse_dev *evdevfbsddev = cuse_dev_create(
+      &evdevfbsd_methods, ed, NULL, 0, 0, 0444, &device_name[5]);
+  if (!evdevfbsddev)
+    return -1;
+
+  return 0;
+}
+
 int main(int argc, char **argv) {
   int ret;
 
@@ -1106,18 +1124,12 @@ int main(int argc, char **argv) {
     }
   }
 
-  {
-    struct cuse_dev *evdevfbsddev = cuse_dev_create(
-        &evdevfbsd_methods, &ed, NULL, 0, 0, 0444, "input/event0");
-    if (!evdevfbsddev)
-      errx(1, "cuse_dev_create failed");
-  }
+  if (create_cuse_device(&ed))
+    errx(1, "failed to create event device");
 
   if (has_guest_device) {
-    struct cuse_dev *evdevfbsddev = cuse_dev_create(
-        &evdevfbsd_methods, &ed_guest, NULL, 0, 0, 0444, "input/event1");
-    if (!evdevfbsddev)
-      errx(1, "cuse_dev_create failed");
+    if (create_cuse_device(&ed_guest))
+      errx(1, "failed to create event device");
   }
 
   pthread_t worker[4];
