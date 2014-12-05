@@ -22,10 +22,14 @@
 #include "zero_initializer.h"
 
 #define EVENT_BUFFER_SIZE 1024
+#define MAX_SLOTS 16
+
+#define ABS_MT_FIRST ABS_MT_TOUCH_MAJOR
+#define ABS_MT_LAST ABS_MT_TOOL_Y
 
 struct input_mt_request {
   uint32_t code;
-  int32_t values[256];
+  int32_t values[MAX_SLOTS];
 };
 
 struct event_device {
@@ -38,7 +42,6 @@ struct event_device {
   bool is_open;
   int clock;
   void *priv_ptr;
-  int (*get_mt_slot_data)(struct event_device *, struct input_mt_request *);
 
   struct input_id iid;
   char const *device_name;
@@ -53,7 +56,7 @@ struct event_device {
   int32_t key_state[KEY_CNT];
   int32_t abs_state[ABS_CNT];
   int32_t current_mt_slot;
-  int32_t mt_state[16][ABS_CNT - ABS_MT_SLOT]; // 16 slots for now
+  int32_t mt_state[MAX_SLOTS][ABS_MT_LAST - ABS_MT_FIRST + 1];
 };
 
 static void get_clock_value(struct event_device *ed, struct timeval *tv) {
@@ -265,20 +268,19 @@ static int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
       return cuse_copy_out(ed->prop_bits, peer_data,
                            (int)MIN(sizeof(ed->prop_bits), len));
     case EVIOCGMTSLOTS(0): {
-      if (ed->get_mt_slot_data) {
-        int ret;
-        uint32_t code;
-        if ((ret = cuse_copy_in(peer_data, &code, sizeof(code))))
-          return ret;
-        struct input_mt_request mtr = ZERO_INITIALIZER;
-        mtr.code = code;
-        if ((ret = ed->get_mt_slot_data(ed, &mtr)))
-          return ret;
-        return cuse_copy_out(&mtr, peer_data,
-                             (int)MIN(sizeof(struct input_mt_request), len));
-      } else {
+      int ret;
+      uint32_t code;
+      if ((ret = cuse_copy_in(peer_data, &code, sizeof(code))))
+        return ret;
+      if (code < ABS_MT_FIRST || code > ABS_MT_LAST)
         return CUSE_ERR_INVALID;
+      struct input_mt_request mtr = ZERO_INITIALIZER;
+      mtr.code = code;
+      for (int i = 0; i < MAX_SLOTS; ++i) {
+        mtr.values[i] = ed->mt_state[i][code];
       }
+      return cuse_copy_out(&mtr, peer_data,
+                           (int)MIN(sizeof(struct input_mt_request), len));
     }
   }
 
@@ -329,10 +331,10 @@ static void put_event(struct event_device *ed, struct timeval *tv,
       // error
       return;
     }
-    if (ed->mt_state[ed->current_mt_slot][code - ABS_MT_SLOT - 1] == value)
+    if (ed->mt_state[ed->current_mt_slot][code - ABS_MT_FIRST] == value)
       return;
     else
-      ed->mt_state[ed->current_mt_slot][code - ABS_MT_SLOT - 1] = value;
+      ed->mt_state[ed->current_mt_slot][code - ABS_MT_FIRST] = value;
   } else if (type == EV_SYN) {
     if (ed->events_since_last_syn == 0)
       return;
@@ -527,30 +529,6 @@ static int synaptics_setup_abs_axes(struct event_device *ed,
   return 0;
 }
 
-static int synaptics_get_mt_slot_data(struct event_device *ed,
-                                      struct input_mt_request *mtr) {
-  struct psm_backend *b = ed->priv_ptr;
-
-  // printf("get_mt_slot_data %u\n", mtr->code);
-  switch (mtr->code) {
-    case ABS_MT_POSITION_X:
-      mtr->values[0] = b->ss[0].x;
-      mtr->values[1] = b->ss[1].x;
-      break;
-    case ABS_MT_POSITION_Y:
-      mtr->values[0] = b->ss[0].y;
-      mtr->values[1] = b->ss[1].y;
-      break;
-    case ABS_MT_TRACKING_ID:
-      mtr->values[0] = b->ss[0].tracking_id;
-      mtr->values[1] = b->ss[1].tracking_id;
-      break;
-    default:
-      return CUSE_ERR_INVALID;
-  }
-  return 0;
-}
-
 static int psm_backend_init(struct event_device *ed) {
   ed->priv_ptr = malloc(sizeof(struct psm_backend));
   if (!ed->priv_ptr)
@@ -625,7 +603,6 @@ static int psm_backend_init(struct event_device *ed) {
         set_bit(ed->abs_bits, ABS_MT_TRACKING_ID);
         ed->abs_info[ABS_MT_TRACKING_ID].minimum = 0;
         ed->abs_info[ABS_MT_TRACKING_ID].maximum = 0xffff;
-        ed->get_mt_slot_data = synaptics_get_mt_slot_data;
       }
 
       set_bit(ed->abs_bits, ABS_PRESSURE);
