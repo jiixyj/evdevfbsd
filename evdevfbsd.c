@@ -40,6 +40,7 @@ struct event_device {
   sem_t event_buffer_sem;
   pthread_t fill_thread;
   bool is_open;
+  uint16_t tracking_ids;
   int clock;
   void *priv_ptr;
 
@@ -192,6 +193,7 @@ static int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
     }
     case EVIOCGRAB:
       // Can be noop, event devices are always grabbed exclusively for now
+      // printf("GRAB: %p\n", peer_data);
       return 0;
     case EVIOCSCLOCKID: {
       int new_clock, ret;
@@ -270,6 +272,8 @@ static int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
     case EVIOCGMTSLOTS(0): {
       int ret;
       uint32_t code;
+      if (len < sizeof(uint32_t))
+        return CUSE_ERR_INVALID;
       if ((ret = cuse_copy_in(peer_data, &code, sizeof(code))))
         return ret;
       if (code < ABS_MT_FIRST || code > ABS_MT_LAST)
@@ -277,7 +281,7 @@ static int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
       struct input_mt_request mtr = ZERO_INITIALIZER;
       mtr.code = code;
       for (int i = 0; i < MAX_SLOTS; ++i) {
-        mtr.values[i] = ed->mt_state[i][code];
+        mtr.values[i] = ed->mt_state[i][code - ABS_MT_FIRST];
       }
       return cuse_copy_out(&mtr, peer_data,
                            (int)MIN(sizeof(struct input_mt_request), len));
@@ -346,6 +350,10 @@ static void put_event(struct event_device *ed, struct timeval *tv,
     else
       ed->current_mt_slot = value;
   }
+
+  // if (code == ABS_MT_TRACKING_ID) {
+  //   printf("seding tid %d for slot %d\n", value, ed->current_mt_slot);
+  // }
 
   if (ed->is_open) {
     struct input_event *buf;
@@ -430,6 +438,26 @@ static void put_event(struct event_device *ed, struct timeval *tv,
   pthread_mutex_unlock(&cons_mutex);
 }
 
+static void enable_mt_slot(struct event_device *ed, struct timeval *tv,
+                           int32_t slot) {
+  put_event(ed, tv, EV_ABS, ABS_MT_SLOT, slot);
+  if (ed->mt_state[slot][ABS_MT_TRACKING_ID - ABS_MT_FIRST] == -1) {
+    put_event(ed, tv, EV_ABS, ABS_MT_TRACKING_ID, ++ed->tracking_ids);
+  }
+  // else {
+  //   put_event(ed, tv, EV_ABS, ABS_MT_TRACKING_ID,
+  //             ed->mt_state[slot][ABS_MT_TRACKING_ID - ABS_MT_FIRST]);
+  // }
+}
+
+static void disable_mt_slot(struct event_device *ed, struct timeval *tv,
+                            int32_t slot) {
+  if (ed->mt_state[slot][ABS_MT_TRACKING_ID - ABS_MT_FIRST] >= 0) {
+    put_event(ed, tv, EV_ABS, ABS_MT_SLOT, slot);
+    put_event(ed, tv, EV_ABS, ABS_MT_TRACKING_ID, -1);
+  }
+}
+
 struct synaptics_ew_state {
   int32_t x;
   int32_t y;
@@ -463,11 +491,13 @@ static void set_bits_generic_ps2(struct event_device *ed) {
   set_bit(ed->rel_bits, REL_Y);
 }
 
-static int32_t synaptics_reverse_y(int32_t y) {
-  y -= 2928;
-  y = -y;
-  y += 2928;
-  return y;
+#define X_MIN_DEFAULT 1472
+#define X_MAX_DEFAULT 5472
+#define Y_MIN_DEFAULT 1408
+#define Y_MAX_DEFAULT 4448
+
+static int32_t synaptics_inverse_y(int32_t y) {
+  return Y_MAX_DEFAULT + Y_MIN_DEFAULT - y;
 }
 
 static int synaptics_setup_abs_axes(struct event_device *ed,
@@ -479,15 +509,15 @@ static int synaptics_setup_abs_axes(struct event_device *ed,
     ed->abs_info[x_axis].minimum = b->synaptics_info.minimumXCoord;
     ed->abs_info[y_axis].minimum = b->synaptics_info.minimumYCoord;
   } else {
-    ed->abs_info[x_axis].minimum = 1472;
-    ed->abs_info[y_axis].minimum = 1408;
+    ed->abs_info[x_axis].minimum = X_MIN_DEFAULT;
+    ed->abs_info[y_axis].minimum = Y_MIN_DEFAULT;
   }
   if (b->synaptics_info.maximumXCoord && b->synaptics_info.maximumYCoord) {
     ed->abs_info[x_axis].maximum = b->synaptics_info.maximumXCoord;
     ed->abs_info[y_axis].maximum = b->synaptics_info.maximumYCoord;
   } else {
-    ed->abs_info[x_axis].maximum = 5472;
-    ed->abs_info[y_axis].maximum = 4448;
+    ed->abs_info[x_axis].maximum = X_MAX_DEFAULT;
+    ed->abs_info[y_axis].maximum = Y_MAX_DEFAULT;
   }
   if (b->synaptics_info.infoXupmm && b->synaptics_info.infoYupmm) {
     ed->abs_info[x_axis].resolution = b->synaptics_info.infoXupmm;
@@ -713,7 +743,6 @@ static void *psm_fill_function(struct event_device *ed) {
   }
 
   int obuttons = 0;
-  uint16_t tracking_ids = 0;
   unsigned char packet[PACKET_MAX];
 
   while (psm_read_full_packet(ed, b->fd, packet, packetsize) == 0) {
@@ -788,51 +817,27 @@ static void *psm_fill_function(struct event_device *ed) {
 
           if (b->synaptics_info.capAdvancedGestures) {
             if (no_fingers >= 2) {
-              b->ss[0].x = MIN(x, b->ews.x);
-              b->ss[0].y = synaptics_reverse_y(MIN(y, b->ews.y));
-              put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 0);
-              if (b->ss[0].tracking_id == -1) {
-                put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, ++tracking_ids);
-                b->ss[0].tracking_id = tracking_ids;
-              }
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, b->ss[0].x);
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y, b->ss[0].y);
+              enable_mt_slot(ed, &tv, 0);
+              if (x > 1 && b->ews.x > 1)
+                put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X,
+                          MIN(x, b->ews.x));
+              if (y > 1 && b->ews.y > 1)
+                put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y,
+                          synaptics_inverse_y(MIN(y, b->ews.y)));
 
-              b->ss[1].x = MAX(x, b->ews.x);
-              b->ss[1].y = synaptics_reverse_y(MAX(y, b->ews.y));
-              put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 1);
-              if (b->ss[1].tracking_id == -1) {
-                put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, ++tracking_ids);
-                b->ss[1].tracking_id = tracking_ids;
-              }
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, b->ss[1].x);
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y, b->ss[1].y);
+              enable_mt_slot(ed, &tv, 1);
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, MAX(x, b->ews.x));
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y,
+                        synaptics_inverse_y(MAX(y, b->ews.y)));
             } else if (no_fingers == 1) {
-              b->ss[0].x = x;
-              b->ss[0].y = synaptics_reverse_y(y);
-              put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 0);
-              if (b->ss[0].tracking_id == -1) {
-                put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, ++tracking_ids);
-                b->ss[0].tracking_id = tracking_ids;
-              }
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, b->ss[0].x);
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y, b->ss[0].y);
-              if (b->ss[1].tracking_id >= 0) {
-                put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 1);
-                put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, -1);
-                b->ss[1].tracking_id = -1;
-              }
+              enable_mt_slot(ed, &tv, 0);
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, x);
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y,
+                        synaptics_inverse_y(y));
+              disable_mt_slot(ed, &tv, 1);
             } else {
-              if (b->ss[0].tracking_id >= 0) {
-                put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 0);
-                put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, -1);
-                b->ss[0].tracking_id = -1;
-              }
-              if (b->ss[1].tracking_id >= 0) {
-                put_event(ed, &tv, EV_ABS, ABS_MT_SLOT, 1);
-                put_event(ed, &tv, EV_ABS, ABS_MT_TRACKING_ID, -1);
-                b->ss[1].tracking_id = -1;
-              }
+              disable_mt_slot(ed, &tv, 0);
+              disable_mt_slot(ed, &tv, 1);
             }
           }
 
@@ -844,7 +849,7 @@ static void *psm_fill_function(struct event_device *ed) {
             if (x > 1)
               put_event(ed, &tv, EV_ABS, ABS_X, x);
             if (y > 1)
-              put_event(ed, &tv, EV_ABS, ABS_Y, synaptics_reverse_y(y));
+              put_event(ed, &tv, EV_ABS, ABS_Y, synaptics_inverse_y(y));
           }
           put_event(ed, &tv, EV_ABS, ABS_PRESSURE, z);
           if (b->synaptics_info.capPalmDetect)
@@ -989,6 +994,9 @@ static int event_device_init(struct event_device *ed) {
   ed->event_buffer_end = 0;
   ed->clock = CLOCK_REALTIME;
   ed->current_mt_slot = -1;
+  for (int i = 0; i < MAX_SLOTS; ++i) {
+    ed->mt_state[i][ABS_MT_TRACKING_ID - ABS_MT_FIRST] = -1;
+  }
   return pthread_mutex_init(&ed->event_buffer_mutex, NULL) ||
          sem_init(&ed->event_buffer_sem, 0, 0);
 }
