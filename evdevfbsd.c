@@ -312,7 +312,15 @@ static struct cuse_methods evdevfbsd_methods = {.cm_open = evdevfbsd_open,
                                                 .cm_poll = evdevfbsd_poll,
                                                 .cm_ioctl = evdevfbsd_ioctl};
 
-#define PACKET_MAX 32
+struct sysmouse_backend {
+  int fd;
+  int level;
+  mousemode_t mode;
+  mousehw_t hw_info;
+  char path[32];
+};
+
+#define PSM_PACKET_MAX_SIZE 32
 
 static int compare_times(struct timeval tv1, struct timeval tv2) {
   tv1.tv_usec -= 500000;
@@ -376,6 +384,13 @@ static void put_event(struct event_device *ed, struct timeval *tv,
     ed->events_since_last_syn = 0;
   } else {
     ed->events_since_last_syn++;
+  }
+
+  // prevent recursion of events
+  if (ed->backend_type == SYSMOUSE_BACKEND) {
+    struct sysmouse_backend *b = ed->priv_ptr;
+    if (!strcmp(b->path, "/dev/sysmouse"))
+      return;
   }
 
   static pthread_mutex_t cons_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -749,7 +764,7 @@ static void *psm_fill_function(struct event_device *ed) {
   }
 
   int obuttons = 0;
-  unsigned char packet[PACKET_MAX];
+  unsigned char packet[PSM_PACKET_MAX_SIZE];
 
   while (psm_read_full_packet(ed, b->fd, packet, packetsize) == 0) {
     pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
@@ -906,24 +921,48 @@ static void *psm_fill_function(struct event_device *ed) {
   return NULL;
 }
 
-struct sysmouse_backend {
-  int fd;
-};
-
-static int sysmouse_backend_init(struct event_device *ed) {
+static int sysmouse_backend_init(struct event_device *ed, char const* path) {
   ed->priv_ptr = malloc(sizeof(struct sysmouse_backend));
   if (!ed->priv_ptr)
     return 1;
 
   struct sysmouse_backend *b = ed->priv_ptr;
 
-  b->fd = open("/dev/sysmouse", O_RDONLY);
+  if (snprintf(b->path, sizeof(b->path), "%s", path) == -1)
+    return 1;
+
+  b->fd = open(b->path, O_RDONLY);
   if (b->fd == -1)
     goto fail;
 
-  int level = 2;
-  if (ioctl(b->fd, MOUSE_SETLEVEL, &level) == -1)
+  b->level = 2;
+  if (ioctl(b->fd, MOUSE_SETLEVEL, &b->level) == -1) {
+    b->level = 1;
+    if (ioctl(b->fd, MOUSE_SETLEVEL, &b->level) == -1) {
+      goto fail;
+    }
+  }
+
+  if (ioctl(b->fd, MOUSE_GETMODE, &b->mode) == -1)
     goto fail;
+
+  if (b->mode.protocol != MOUSE_PROTO_SYSMOUSE)
+    goto fail;
+
+  if (b->mode.packetsize < 0 || b->mode.packetsize > PSM_PACKET_MAX_SIZE)
+    goto fail;
+
+  if (ioctl(b->fd, MOUSE_GETHWINFO, &b->hw_info) == -1)
+    goto fail;
+
+  printf("nr buttons: %d\n", b->hw_info.buttons);
+
+  set_bits_generic_ps2(ed);
+  for (int i = 3; i < b->hw_info.buttons; ++i) {
+    set_bit(ed->key_bits, BTN_MOUSE + i);
+  }
+  set_bit(ed->rel_bits, REL_WHEEL);
+  set_bit(ed->rel_bits, REL_HWHEEL);
 
   return 0;
 fail:
@@ -934,19 +973,35 @@ fail:
 static void *sysmouse_fill_function(struct event_device *ed) {
   struct sysmouse_backend *b = ed->priv_ptr;
   int obuttons = 0;
-  unsigned char packet[19];
+  unsigned char packet[PSM_PACKET_MAX_SIZE];
 
-  while (read(b->fd, packet, sizeof(packet)) == sizeof(packet)) {
+  while (read(b->fd, packet, (size_t)b->mode.packetsize) ==
+         b->mode.packetsize) {
     pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
 
     if (event_device_nr_free_buffer(ed) >= 8) {
-      int buttons, dx, dy, dz, dw;
+      int buttons = 0, dx = 0, dy = 0, dz = 0, dw = 0;
 
-      buttons = (~packet[0]) & 0x07;
-      dx = (int16_t)((packet[8] << 9) | (packet[9] << 2)) >> 2;
-      dy = -((int16_t)((packet[10] << 9) | (packet[11] << 2)) >> 2);
-      dz = -((int16_t)((packet[12] << 9) | (packet[13] << 2)) >> 2);
-      dw = (int16_t)((packet[14] << 9) | (packet[15] << 2)) >> 2;
+      if (b->mode.packetsize >= 5) {
+        buttons = (~packet[0]) & 0x07;
+        dx = (int8_t)packet[1] + (int8_t)packet[3];
+        dy = (int8_t)packet[2] + (int8_t)packet[4];
+        dy = -dy;
+      }
+
+      if (b->mode.packetsize >= 8) {
+        dz = ((int8_t)(packet[5] << 1) + (int8_t)(packet[6] << 1)) / 2;
+        if (dz == -1 && packet[6] == 64)
+          dz = 127;
+        buttons |= (~packet[7] & MOUSE_SYS_EXTBUTTONS) << 3;
+      }
+
+      if (b->mode.packetsize >= 16) {
+        dx = (int16_t)((packet[8] << 9) | (packet[9] << 2)) >> 2;
+        dy = -((int16_t)((packet[10] << 9) | (packet[11] << 2)) >> 2);
+        dz = -((int16_t)((packet[12] << 9) | (packet[13] << 2)) >> 2);
+        dw = (int16_t)((packet[14] << 9) | (packet[15] << 2)) >> 2;
+      }
 
       struct timeval tv;
       get_clock_value(ed, &tv);
@@ -955,6 +1010,10 @@ static void *sysmouse_fill_function(struct event_device *ed) {
       put_event(ed, &tv, EV_KEY, BTN_MIDDLE,
                 !!(buttons & MOUSE_SYS_BUTTON2UP));
       put_event(ed, &tv, EV_KEY, BTN_RIGHT, !!(buttons & MOUSE_SYS_BUTTON3UP));
+      put_event(ed, &tv, EV_KEY, BTN_SIDE,
+                !!(buttons & (MOUSE_SYS_BUTTON4UP << 3)));
+      put_event(ed, &tv, EV_KEY, BTN_EXTRA,
+                !!(buttons & (MOUSE_SYS_BUTTON5UP << 3)));
 
       if (dx)
         put_event(ed, &tv, EV_REL, REL_X, dx);
@@ -1015,8 +1074,8 @@ static int event_device_open(struct event_device *ed, char const *path) {
       return -1;
     fill_function = (void *(*)(void *))psm_fill_function;
     ed->backend_type = PSM_BACKEND;
-  } else if (!strcmp(path, "/dev/sysmouse")) {
-    if (sysmouse_backend_init(ed))
+  } else if (!strcmp(path, "/dev/sysmouse") || !strcmp(path, "/dev/ums0")) {
+    if (sysmouse_backend_init(ed, path))
       return -1;
     fill_function = (void *(*)(void *))sysmouse_fill_function;
     ed->backend_type = SYSMOUSE_BACKEND;
