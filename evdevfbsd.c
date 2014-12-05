@@ -32,6 +32,11 @@ struct input_mt_request {
   int32_t values[MAX_SLOTS];
 };
 
+enum backends {
+  PSM_BACKEND,
+  SYSMOUSE_BACKEND
+};
+
 struct event_device {
   int fd;
   struct input_event event_buffer[EVENT_BUFFER_SIZE];
@@ -42,6 +47,7 @@ struct event_device {
   bool is_open;
   uint16_t tracking_ids;
   int clock;
+  int backend_type;
   void *priv_ptr;
 
   struct input_id iid;
@@ -1004,12 +1010,16 @@ static int event_device_init(struct event_device *ed) {
 static int event_device_open(struct event_device *ed, char const *path) {
   void *(*fill_function)(void *);
 
-  if (!strcmp(path, "/dev/bpsm0")) {
-    psm_backend_init(ed);
+  if (!strcmp(path, "/dev/bpsm0") || !strcmp(path, "/dev/psm0")) {
+    if (psm_backend_init(ed))
+      return -1;
     fill_function = (void *(*)(void *))psm_fill_function;
+    ed->backend_type = PSM_BACKEND;
   } else if (!strcmp(path, "/dev/sysmouse")) {
-    sysmouse_backend_init(ed);
+    if (sysmouse_backend_init(ed))
+      return -1;
     fill_function = (void *(*)(void *))sysmouse_fill_function;
+    ed->backend_type = SYSMOUSE_BACKEND;
   } else {
     return -EINVAL;
   }
@@ -1068,19 +1078,33 @@ fail:
   return 1;
 }
 
-int main() {
+int main(int argc, char **argv) {
   int ret;
+
+  if (argc != 2) {
+    fprintf(stderr, "usage: %s <device>\n", argv[0]);
+    exit(1);
+  }
 
   if ((ret = cuse_init()) < 0)
     errx(1, "cuse_init returned %d", ret);
 
   struct event_device ed;
-  event_device_init(&ed);               // XXX
-  event_device_open(&ed, "/dev/bpsm0"); // XXX
+  event_device_init(&ed); // XXX
+  if (event_device_open(&ed, argv[1]))
+    errx(1, "could not open event device");
 
+  bool has_guest_device = false;
   struct event_device ed_guest;
-  event_device_init(&ed_guest);               // XXX
-  event_device_open_as_guest(&ed_guest, &ed); // XXX
+  if (ed.backend_type == PSM_BACKEND) {
+    struct psm_backend *b = ed.priv_ptr;
+    if (b->hw_info.model == MOUSE_MODEL_SYNAPTICS &&
+        b->synaptics_info.capPassthrough) {
+      event_device_init(&ed_guest); // XXX
+      if (event_device_open_as_guest(&ed_guest, &ed) == 0)
+        has_guest_device = true;
+    }
+  }
 
   {
     struct cuse_dev *evdevfbsddev = cuse_dev_create(
@@ -1089,7 +1113,7 @@ int main() {
       errx(1, "cuse_dev_create failed");
   }
 
-  {
+  if (has_guest_device) {
     struct cuse_dev *evdevfbsddev = cuse_dev_create(
         &evdevfbsd_methods, &ed_guest, NULL, 0, 0, 0444, "input/event1");
     if (!evdevfbsddev)
