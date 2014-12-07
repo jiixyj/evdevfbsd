@@ -303,6 +303,17 @@ static int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
   }
 
   printf("got unknown ioctl %lu %lu %lu\n", cmd, base_cmd, len);
+  unsigned long direction = cmd & IOC_DIRMASK;
+  if (direction == IOC_VOID) {
+    puts("direction: void");
+  } else if (direction == IOC_OUT) {
+    puts("direction: out");
+  } else if (direction == IOC_IN) {
+    puts("direction: in");
+  }
+  printf("length: %lu\n", IOCPARM_LEN(cmd));
+  printf("group: %c\n", (unsigned char) IOCGROUP(cmd));
+  printf("num: %lu 0x%02lx\n", cmd & 0xff, cmd & 0xff);
   return CUSE_ERR_INVALID;
 }
 
