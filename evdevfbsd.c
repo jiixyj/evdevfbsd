@@ -32,10 +32,7 @@ struct input_mt_request {
   int32_t values[MAX_SLOTS];
 };
 
-enum backends {
-  PSM_BACKEND,
-  SYSMOUSE_BACKEND
-};
+enum backends { PSM_BACKEND, SYSMOUSE_BACKEND };
 
 struct event_device {
   int fd;
@@ -312,7 +309,7 @@ static int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
     puts("direction: in");
   }
   printf("length: %lu\n", IOCPARM_LEN(cmd));
-  printf("group: %c\n", (unsigned char) IOCGROUP(cmd));
+  printf("group: %c\n", (unsigned char)IOCGROUP(cmd));
   printf("num: %lu 0x%02lx\n", cmd & 0xff, cmd & 0xff);
   return CUSE_ERR_INVALID;
 }
@@ -422,7 +419,6 @@ static void put_event(struct event_device *ed, struct timeval *tv,
     pthread_mutex_unlock(&cons_mutex);
     return;
   }
-
 
   if (type == EV_REL) {
     if (code == REL_X)
@@ -932,7 +928,7 @@ static void *psm_fill_function(struct event_device *ed) {
   return NULL;
 }
 
-static int sysmouse_backend_init(struct event_device *ed, char const* path) {
+static int sysmouse_backend_init(struct event_device *ed, char const *path) {
   ed->priv_ptr = malloc(sizeof(struct sysmouse_backend));
   if (!ed->priv_ptr)
     return 1;
@@ -1158,8 +1154,8 @@ static int create_cuse_device(struct event_device *ed) {
       break;
   }
 
-  struct cuse_dev *evdevfbsddev = cuse_dev_create(
-      &evdevfbsd_methods, ed, NULL, 0, 0, 0444, &device_name[5]);
+  struct cuse_dev *evdevfbsddev = cuse_dev_create(&evdevfbsd_methods, ed, NULL,
+                                                  0, 0, 0444, &device_name[5]);
   if (!evdevfbsddev)
     return -1;
 
