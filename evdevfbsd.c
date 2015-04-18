@@ -642,7 +642,8 @@ static int psm_backend_init(struct event_device *ed) {
       }
       set_bit(ed->key_bits, BTN_TOUCH);
       set_bit(ed->key_bits, BTN_TOOL_FINGER);
-      if (b->synaptics_info.capMultiFinger) {
+      if (b->synaptics_info.capMultiFinger ||
+          b->synaptics_info.capAdvancedGestures) {
         set_bit(ed->key_bits, BTN_TOOL_DOUBLETAP);
         set_bit(ed->key_bits, BTN_TOOL_TRIPLETAP);
       }
@@ -827,7 +828,8 @@ static void *psm_fill_function(struct event_device *ed) {
           if (z > 0 && x > 1) {
             no_fingers = 1;
             finger_width = 5;
-            if (w <= 1 && b->synaptics_info.capMultiFinger) {
+            if (w <= 1 && (b->synaptics_info.capMultiFinger ||
+                           b->synaptics_info.capAdvancedGestures)) {
               no_fingers = w + 2;
             } else if (w >= 4 && w <= 15 && b->synaptics_info.capPalmDetect) {
               finger_width = w;
@@ -884,7 +886,8 @@ static void *psm_fill_function(struct event_device *ed) {
             put_event(ed, &tv, EV_ABS, ABS_TOOL_WIDTH, finger_width);
 
           put_event(ed, &tv, EV_KEY, BTN_TOOL_FINGER, no_fingers == 1);
-          if (b->synaptics_info.capMultiFinger) {
+          if (b->synaptics_info.capMultiFinger ||
+              b->synaptics_info.capAdvancedGestures) {
             put_event(ed, &tv, EV_KEY, BTN_TOOL_DOUBLETAP, no_fingers == 2);
             put_event(ed, &tv, EV_KEY, BTN_TOOL_TRIPLETAP, no_fingers == 3);
           }
