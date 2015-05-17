@@ -1,4 +1,5 @@
 PROG=	evdevfbsd
+SRCS=	evdevfbsd.c backend-psm.c backend-sysmouse.c backend-atkbd.c util.c
 MAN=
 
 LDADD=		-lcuse
