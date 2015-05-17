@@ -1,4 +1,5 @@
 #include <sys/consio.h>
+#include <sys/event.h>
 #include <sys/mouse.h>
 #include <sys/param.h>
 
@@ -45,6 +46,7 @@ struct event_device {
   uint16_t tracking_ids;
   int clock;
   int backend_type;
+  struct cuse_dev *cuse_device;
   void *priv_ptr;
 
   struct input_id iid;
@@ -1068,6 +1070,7 @@ static int event_device_init(struct event_device *ed) {
   ed->fd = -1;
   ed->event_buffer_end = 0;
   ed->clock = CLOCK_REALTIME;
+  ed->cuse_device = NULL;
   ed->current_mt_slot = -1;
   for (int i = 0; i < MAX_SLOTS; ++i) {
     ed->mt_state[i][ABS_MT_TRACKING_ID - ABS_MT_FIRST] = -1;
@@ -1147,6 +1150,8 @@ fail:
   return 1;
 }
 
+static void event_device_cleanup(struct event_device *ed __unused) {}
+
 static int create_cuse_device(struct event_device *ed) {
   char device_name[32] = ZERO_INITIALIZER;
   for (int i = 0; i < 32; ++i) {
@@ -1157,13 +1162,14 @@ static int create_cuse_device(struct event_device *ed) {
       break;
   }
 
-  struct cuse_dev *evdevfbsddev = cuse_dev_create(&evdevfbsd_methods, ed, NULL,
-                                                  0, 0, 0444, &device_name[5]);
-  if (!evdevfbsddev)
+  ed->cuse_device = cuse_dev_create(&evdevfbsd_methods, ed, NULL, 0, 0, 0444,
+                                    &device_name[5]);
+  if (!ed->cuse_device)
     return -1;
 
   return 0;
 }
+
 
 int main(int argc, char **argv) {
   int ret;
@@ -1202,13 +1208,41 @@ int main(int argc, char **argv) {
   }
 
   pthread_t worker[4];
-  pthread_create(&worker[0], NULL, wait_and_proc, NULL); // XXX
-  pthread_create(&worker[1], NULL, wait_and_proc, NULL); // XXX
-  pthread_create(&worker[2], NULL, wait_and_proc, NULL); // XXX
-  pthread_create(&worker[3], NULL, wait_and_proc, NULL); // XXX
 
-  pthread_join(worker[3], NULL); // XXX
-  pthread_join(worker[2], NULL); // XXX
-  pthread_join(worker[1], NULL); // XXX
-  pthread_join(worker[0], NULL); // XXX
+  for (unsigned i = 0; i < nitems(worker); ++i) {
+    pthread_create(&worker[i], NULL, wait_and_proc, NULL); // XXX
+  }
+
+  signal(SIGINT, SIG_IGN);
+  signal(SIGTERM, SIG_IGN);
+  signal(SIGHUP, SIG_IGN);
+  int kq = kqueue();
+  if (kq == -1)
+    errx(1, "failed to create kqueue");
+
+  struct kevent evs[3];
+  EV_SET(&evs[0], SIGINT, EVFILT_SIGNAL, EV_ADD, 0, 0, 0);
+  EV_SET(&evs[1], SIGTERM, EVFILT_SIGNAL, EV_ADD, 0, 0, 0);
+  EV_SET(&evs[2], SIGHUP, EVFILT_SIGNAL, EV_ADD, 0, 0, 0);
+  if (kevent(kq, evs, 3, NULL, 0, NULL) == -1)
+    errx(1, "kevent failed");
+
+  kevent(kq, NULL, 0, evs, 1, NULL);
+
+  for (unsigned i = 0; i < nitems(worker); ++i) {
+    pthread_kill(worker[i], SIGHUP);
+    pthread_join(worker[i], NULL); // XXX
+  }
+
+  fprintf(stderr, "workers joined...\n");
+
+  if (has_guest_device) {
+    cuse_dev_destroy(ed_guest.cuse_device);
+    event_device_cleanup(&ed_guest);
+  }
+
+  cuse_dev_destroy(ed.cuse_device);
+  event_device_cleanup(&ed);
+
+  fprintf(stderr, "closing...\n");
 }
