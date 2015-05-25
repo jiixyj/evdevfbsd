@@ -1,6 +1,7 @@
 #include "util.h"
 
 #include <sys/consio.h>
+#include <sys/param.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -73,15 +74,19 @@ void put_event(struct event_device *ed, struct timeval *tv,
   //   printf("seding tid %d for slot %d\n", value, ed->current_mt_slot);
   // }
 
-  if (ed->is_open) {
+  for (unsigned i = 0; i < nitems(ed->event_clients); ++i) {
     struct input_event *buf;
-    buf = &ed->event_buffer[ed->event_buffer_end];
+    struct event_client_state *client_state = ed->event_clients[i];
+    if (!client_state)
+      continue;
+
+    buf = &client_state->event_buffer[client_state->event_buffer_end];
     buf->time = *tv;
     buf->type = type;
     buf->code = code;
     buf->value = value;
-    ++ed->event_buffer_end;
-    sem_post(&ed->event_buffer_sem);
+    ++client_state->event_buffer_end;
+    sem_post(&client_state->event_buffer_sem);
   }
 
   if (type == EV_SYN) {
@@ -193,5 +198,17 @@ void get_clock_value(struct event_device *ed, struct timeval *tv) {
 }
 
 int event_device_nr_free_buffer(struct event_device *ed) {
-  return EVENT_BUFFER_SIZE - ed->event_buffer_end;
+  int ret = EVENT_BUFFER_SIZE;
+
+  for (unsigned i = 0; i < nitems(ed->event_clients); ++i) {
+    struct event_client_state *client_state = ed->event_clients[i];
+    if (!client_state)
+      continue;
+
+    int buffer_size = EVENT_BUFFER_SIZE - client_state->event_buffer_end;
+    if (buffer_size < ret)
+      ret = buffer_size;
+  }
+
+  return ret;
 }

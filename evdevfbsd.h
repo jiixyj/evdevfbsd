@@ -18,14 +18,17 @@
 
 enum backends { PSM_BACKEND, SYSMOUSE_BACKEND, ATKBD_BACKEND };
 
-struct event_device {
-  int fd;
+struct event_client_state {
   struct input_event event_buffer[EVENT_BUFFER_SIZE];
   int event_buffer_end; /* index at which to write next event */
-  pthread_mutex_t event_buffer_mutex;
   sem_t event_buffer_sem;
+};
+
+struct event_device {
+  int fd;
+  struct event_client_state *event_clients[8];
+  pthread_mutex_t event_buffer_mutex;
   pthread_t fill_thread;
-  bool is_open;
   uint16_t tracking_ids;
   int clock;
   int backend_type;

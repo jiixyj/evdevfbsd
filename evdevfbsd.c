@@ -20,17 +20,36 @@
 #include "backend-sysmouse.h"
 #include "backend-atkbd.h"
 
+static struct event_client_state *event_client_new() {
+  struct event_client_state *ret =
+      calloc(sizeof(struct event_client_state), 1);
+  if (!ret)
+    return NULL;
+
+  if (sem_init(&ret->event_buffer_sem, 0, 0) == -1) {
+    free(ret);
+    return NULL;
+  }
+
+  return ret;
+}
+
 static int evdevfbsd_open(struct cuse_dev *cdev, int fflags __unused) {
   // puts("device opened");
   struct event_device *ed = cuse_dev_get_priv0(cdev);
 
-  int ret = CUSE_ERR_NONE;
+  int ret = CUSE_ERR_BUSY;
 
   pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
-  if (ed->is_open) {
-    ret = CUSE_ERR_BUSY;
-  } else {
-    ed->is_open = true;
+  for (unsigned i = 0; i < nitems(ed->event_clients); ++i) {
+    if (!ed->event_clients[i]) {
+      ed->event_clients[i] = event_client_new();
+      if (ed->event_clients[i]) {
+        cuse_dev_set_per_file_handle(cdev, ed->event_clients[i]);
+        ret = CUSE_ERR_NONE;
+      }
+      break;
+    }
   }
   pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
   return ret;
@@ -40,10 +59,24 @@ static int evdevfbsd_close(struct cuse_dev *cdev, int fflags __unused) {
   struct event_device *ed = cuse_dev_get_priv0(cdev);
 
   pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
-  for (int i = 0; i < ed->event_buffer_end; ++i)
-    sem_wait(&ed->event_buffer_sem);
-  ed->event_buffer_end = 0;
-  ed->is_open = false;
+
+  struct event_client_state *client_state = cuse_dev_get_per_file_handle(cdev);
+
+  for (int i = 0; i < client_state->event_buffer_end; ++i)
+    sem_wait(&client_state->event_buffer_sem);
+
+  sem_destroy(&client_state->event_buffer_sem);
+  client_state->event_buffer_end = 0;
+
+  for (unsigned i = 0; i < nitems(ed->event_clients); ++i) {
+    if (ed->event_clients[i] == client_state) {
+      ed->event_clients[i] = NULL;
+      break;
+    }
+  }
+
+  free(client_state);
+
   pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
   return CUSE_ERR_NONE;
 }
@@ -62,33 +95,37 @@ static int evdevfbsd_read(struct cuse_dev *cdev, int fflags, void *user_ptr,
   struct event_device *ed = cuse_dev_get_priv0(cdev);
   int ret;
 
+  struct event_client_state *client_state = cuse_dev_get_per_file_handle(cdev);
+
 retry:
   if (!(fflags & CUSE_FFLAG_NONBLOCK)) {
-    ret = sem_wait(&ed->event_buffer_sem);
+    ret = sem_wait(&client_state->event_buffer_sem);
     if (ret == -1 && cuse_got_peer_signal() == 0)
       return CUSE_ERR_SIGNAL;
   }
 
   pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
-  if (ed->event_buffer_end == 0) {
+  if (client_state->event_buffer_end == 0) {
     if (fflags & CUSE_FFLAG_NONBLOCK)
       ret = CUSE_ERR_WOULDBLOCK;
     else {
-      sem_post(&ed->event_buffer_sem);
+      sem_post(&client_state->event_buffer_sem);
       pthread_mutex_unlock(&ed->event_buffer_mutex);
       goto retry;
     }
   } else {
-    nr_events = MIN(requested_events, ed->event_buffer_end);
-    ret = cuse_copy_out(ed->event_buffer, user_ptr,
+    nr_events = MIN(requested_events, client_state->event_buffer_end);
+    ret = cuse_copy_out(client_state->event_buffer, user_ptr,
                         nr_events * (int)sizeof(struct input_event));
     if (ret == 0) {
-      memmove(ed->event_buffer, &ed->event_buffer[nr_events],
-              (size_t)(ed->event_buffer_end - nr_events) *
+      memmove(client_state->event_buffer,
+              &client_state->event_buffer[nr_events],
+              (size_t)(client_state->event_buffer_end - nr_events) *
                   sizeof(struct input_event));
-      ed->event_buffer_end = ed->event_buffer_end - nr_events;
+      client_state->event_buffer_end =
+          client_state->event_buffer_end - nr_events;
       for (int i = 0; i < nr_events - 1; ++i)
-        sem_wait(&ed->event_buffer_sem);
+        sem_wait(&client_state->event_buffer_sem);
     }
   }
   pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
@@ -104,8 +141,10 @@ static int evdevfbsd_poll(struct cuse_dev *cdev, int fflags __unused,
   int ret = CUSE_POLL_NONE;
   struct event_device *ed = cuse_dev_get_priv0(cdev);
 
+  struct event_client_state *client_state = cuse_dev_get_per_file_handle(cdev);
+
   pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
-  if (ed->event_buffer_end > 0)
+  if (client_state->event_buffer_end > 0)
     ret = CUSE_POLL_READ;
   pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
 
@@ -292,15 +331,13 @@ static void *wait_and_proc(void *notused __unused) {
 static int event_device_init(struct event_device *ed) {
   memset(ed, 0, sizeof(*ed));
   ed->fd = -1;
-  ed->event_buffer_end = 0;
   ed->clock = CLOCK_REALTIME;
   ed->cuse_device = NULL;
   ed->current_mt_slot = -1;
   for (int i = 0; i < MAX_SLOTS; ++i) {
     ed->mt_state[i][ABS_MT_TRACKING_ID - ABS_MT_FIRST] = -1;
   }
-  return pthread_mutex_init(&ed->event_buffer_mutex, NULL) ||
-         sem_init(&ed->event_buffer_sem, 0, 0);
+  return pthread_mutex_init(&ed->event_buffer_mutex, NULL);
 }
 
 static int event_device_open(struct event_device *ed, char const *path) {
