@@ -166,73 +166,72 @@ void *atkbd_fill_function(struct event_device *ed) {
 
     pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
 
-    if (event_device_nr_free_buffer(ed) >= 8) {
-      struct timeval tv;
-      get_clock_value(ed, &tv);
+    event_client_need_free_bufsize(ed, 8);
+    struct timeval tv;
+    get_clock_value(ed, &tv);
 
-      uint16_t code = raw_code;
-      bool release = false;
-      if (b->atkbd.escape || release_extraction_needed(&b->atkbd, code)) {
-        release = code >> 7;
-        code &= 0x7f;
-      }
-      if (!b->atkbd.escape) {
-        calculate_release_extraction_state(&b->atkbd, raw_code);
-      }
-
-      if (code == AT_ES0) {
-        b->atkbd.escape = 1;
-        goto next;
-      } else if (code == AT_ES1) {
-        b->atkbd.escape = 2;
-        goto next;
-      } else if (code == AT_BAT || code == AT_REL || code == AT_ACK ||
-                 code == AT_NAK || code == AT_ERR) {
-        fprintf(stderr, "unexpected control code: %d\n", +code);
-        goto next;
-      }
-
-      code = raw_to_scan(b->atkbd.escape, code);
-
-      if (b->atkbd.escape > 0) {
-        --b->atkbd.escape;
-        if (b->atkbd.escape > 0)
-          goto next;
-      }
-
-      uint16_t evdev_code = scan_to_evdev[code];
-      if (evdev_code != 255) {
-        put_event(ed, &tv, EV_MSC, MSC_SCAN, code);
-      }
-
-      if (evdev_code == 255) {
-        goto next;
-      } else if (evdev_code == 0) {
-        fprintf(stderr, "unknown key encountered\n");
-        put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
-      } else {
-        int evdev_value;
-        if (release) {
-          evdev_value = 0;
-        } else if (ed->key_state[evdev_code]) {
-          evdev_value = 2;
-        } else {
-          evdev_value = 1;
-        }
-
-        put_event(ed, &tv, EV_KEY, evdev_code, evdev_value);
-        put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
-
-        if (evdev_value && (code == AT_HANJA || code == AT_HANGEUL)) {
-          put_event(ed, &tv, EV_MSC, MSC_SCAN, code);
-          put_event(ed, &tv, EV_KEY, evdev_code, 0);
-          put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
-        }
-      }
-
-    next:
-      cuse_poll_wakeup();
+    uint16_t code = raw_code;
+    bool release = false;
+    if (b->atkbd.escape || release_extraction_needed(&b->atkbd, code)) {
+      release = code >> 7;
+      code &= 0x7f;
     }
+    if (!b->atkbd.escape) {
+      calculate_release_extraction_state(&b->atkbd, raw_code);
+    }
+
+    if (code == AT_ES0) {
+      b->atkbd.escape = 1;
+      goto next;
+    } else if (code == AT_ES1) {
+      b->atkbd.escape = 2;
+      goto next;
+    } else if (code == AT_BAT || code == AT_REL || code == AT_ACK ||
+               code == AT_NAK || code == AT_ERR) {
+      fprintf(stderr, "unexpected control code: %d\n", +code);
+      goto next;
+    }
+
+    code = raw_to_scan(b->atkbd.escape, code);
+
+    if (b->atkbd.escape > 0) {
+      --b->atkbd.escape;
+      if (b->atkbd.escape > 0)
+        goto next;
+    }
+
+    uint16_t evdev_code = scan_to_evdev[code];
+    if (evdev_code != 255) {
+      put_event(ed, &tv, EV_MSC, MSC_SCAN, code);
+    }
+
+    if (evdev_code == 255) {
+      goto next;
+    } else if (evdev_code == 0) {
+      fprintf(stderr, "unknown key encountered\n");
+      put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
+    } else {
+      int evdev_value;
+      if (release) {
+        evdev_value = 0;
+      } else if (ed->key_state[evdev_code]) {
+        evdev_value = 2;
+      } else {
+        evdev_value = 1;
+      }
+
+      put_event(ed, &tv, EV_KEY, evdev_code, evdev_value);
+      put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
+
+      if (evdev_value && (code == AT_HANJA || code == AT_HANGEUL)) {
+        put_event(ed, &tv, EV_MSC, MSC_SCAN, code);
+        put_event(ed, &tv, EV_KEY, evdev_code, 0);
+        put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
+      }
+    }
+
+  next:
+    cuse_poll_wakeup();
 
     pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
     if (!write_keycode(b->vkbd_fd, raw_code))

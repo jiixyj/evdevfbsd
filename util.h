@@ -12,7 +12,8 @@ void put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
 void enable_mt_slot(struct event_device *ed, struct timeval *tv, int32_t slot);
 void disable_mt_slot(struct event_device *ed, struct timeval *tv,
                      int32_t slot);
-int event_device_nr_free_buffer(struct event_device *ed);
+void event_client_need_free_bufsize(struct event_device *ed,
+                                    int needed_buffer);
 void get_clock_value(struct event_device *ed, struct timeval *tv);
 
 #endif

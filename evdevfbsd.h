@@ -21,6 +21,7 @@ enum backends { PSM_BACKEND, SYSMOUSE_BACKEND, ATKBD_BACKEND };
 struct event_client_state {
   struct input_event event_buffer[EVENT_BUFFER_SIZE];
   int event_buffer_end; /* index at which to write next event */
+  int free_buffer_needed;
   sem_t event_buffer_sem;
 };
 

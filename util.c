@@ -80,12 +80,20 @@ void put_event(struct event_device *ed, struct timeval *tv,
     if (!client_state)
       continue;
 
+    int needed_buffer = client_state->free_buffer_needed;
+    if (needed_buffer < 1)
+      needed_buffer = 1;
+
+    if (EVENT_BUFFER_SIZE - client_state->event_buffer_end < needed_buffer)
+      continue;
+
     buf = &client_state->event_buffer[client_state->event_buffer_end];
     buf->time = *tv;
     buf->type = type;
     buf->code = code;
     buf->value = value;
     ++client_state->event_buffer_end;
+    --client_state->free_buffer_needed;
     sem_post(&client_state->event_buffer_sem);
   }
 
@@ -197,18 +205,12 @@ void get_clock_value(struct event_device *ed, struct timeval *tv) {
   bintime2timeval(&bt, tv);
 }
 
-int event_device_nr_free_buffer(struct event_device *ed) {
-  int ret = EVENT_BUFFER_SIZE;
-
+void event_client_need_free_bufsize(struct event_device *ed, int needed_buffer) {
   for (unsigned i = 0; i < nitems(ed->event_clients); ++i) {
     struct event_client_state *client_state = ed->event_clients[i];
     if (!client_state)
       continue;
 
-    int buffer_size = EVENT_BUFFER_SIZE - client_state->event_buffer_end;
-    if (buffer_size < ret)
-      ret = buffer_size;
+    client_state->free_buffer_needed = needed_buffer;
   }
-
-  return ret;
 }

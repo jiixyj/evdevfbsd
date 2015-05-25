@@ -67,55 +67,53 @@ void *sysmouse_fill_function(struct event_device *ed) {
          b->mode.packetsize) {
     pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
 
-    if (event_device_nr_free_buffer(ed) >= 8) {
-      int buttons = 0, dx = 0, dy = 0, dz = 0, dw = 0;
+    event_client_need_free_bufsize(ed, 8);
+    int buttons = 0, dx = 0, dy = 0, dz = 0, dw = 0;
 
-      if (b->mode.packetsize >= 5) {
-        buttons = (~packet[0]) & 0x07;
-        dx = (int8_t)packet[1] + (int8_t)packet[3];
-        dy = (int8_t)packet[2] + (int8_t)packet[4];
-        dy = -dy;
-      }
-
-      if (b->mode.packetsize >= 8) {
-        dz = ((int8_t)(packet[5] << 1) + (int8_t)(packet[6] << 1)) / 2;
-        if (dz == -1 && packet[6] == 64)
-          dz = 127;
-        buttons |= (~packet[7] & MOUSE_SYS_EXTBUTTONS) << 3;
-      }
-
-      if (b->mode.packetsize >= 16) {
-        dx = (int16_t)((packet[8] << 9) | (packet[9] << 2)) >> 2;
-        dy = -((int16_t)((packet[10] << 9) | (packet[11] << 2)) >> 2);
-        dz = -((int16_t)((packet[12] << 9) | (packet[13] << 2)) >> 2);
-        dw = (int16_t)((packet[14] << 9) | (packet[15] << 2)) >> 2;
-      }
-
-      struct timeval tv;
-      get_clock_value(ed, &tv);
-
-      put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & MOUSE_SYS_BUTTON1UP));
-      put_event(ed, &tv, EV_KEY, BTN_MIDDLE,
-                !!(buttons & MOUSE_SYS_BUTTON2UP));
-      put_event(ed, &tv, EV_KEY, BTN_RIGHT, !!(buttons & MOUSE_SYS_BUTTON3UP));
-      put_event(ed, &tv, EV_KEY, BTN_SIDE,
-                !!(buttons & (MOUSE_SYS_BUTTON4UP << 3)));
-      put_event(ed, &tv, EV_KEY, BTN_EXTRA,
-                !!(buttons & (MOUSE_SYS_BUTTON5UP << 3)));
-
-      if (dx)
-        put_event(ed, &tv, EV_REL, REL_X, dx);
-      if (dy)
-        put_event(ed, &tv, EV_REL, REL_Y, dy);
-      if (dz)
-        put_event(ed, &tv, EV_REL, REL_WHEEL, dz);
-      if (dw)
-        put_event(ed, &tv, EV_REL, REL_HWHEEL, dw);
-
-      put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
-      cuse_poll_wakeup();
-      obuttons = buttons;
+    if (b->mode.packetsize >= 5) {
+      buttons = (~packet[0]) & 0x07;
+      dx = (int8_t)packet[1] + (int8_t)packet[3];
+      dy = (int8_t)packet[2] + (int8_t)packet[4];
+      dy = -dy;
     }
+
+    if (b->mode.packetsize >= 8) {
+      dz = ((int8_t)(packet[5] << 1) + (int8_t)(packet[6] << 1)) / 2;
+      if (dz == -1 && packet[6] == 64)
+        dz = 127;
+      buttons |= (~packet[7] & MOUSE_SYS_EXTBUTTONS) << 3;
+    }
+
+    if (b->mode.packetsize >= 16) {
+      dx = (int16_t)((packet[8] << 9) | (packet[9] << 2)) >> 2;
+      dy = -((int16_t)((packet[10] << 9) | (packet[11] << 2)) >> 2);
+      dz = -((int16_t)((packet[12] << 9) | (packet[13] << 2)) >> 2);
+      dw = (int16_t)((packet[14] << 9) | (packet[15] << 2)) >> 2;
+    }
+
+    struct timeval tv;
+    get_clock_value(ed, &tv);
+
+    put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & MOUSE_SYS_BUTTON1UP));
+    put_event(ed, &tv, EV_KEY, BTN_MIDDLE, !!(buttons & MOUSE_SYS_BUTTON2UP));
+    put_event(ed, &tv, EV_KEY, BTN_RIGHT, !!(buttons & MOUSE_SYS_BUTTON3UP));
+    put_event(ed, &tv, EV_KEY, BTN_SIDE,
+              !!(buttons & (MOUSE_SYS_BUTTON4UP << 3)));
+    put_event(ed, &tv, EV_KEY, BTN_EXTRA,
+              !!(buttons & (MOUSE_SYS_BUTTON5UP << 3)));
+
+    if (dx)
+      put_event(ed, &tv, EV_REL, REL_X, dx);
+    if (dy)
+      put_event(ed, &tv, EV_REL, REL_Y, dy);
+    if (dz)
+      put_event(ed, &tv, EV_REL, REL_WHEEL, dz);
+    if (dw)
+      put_event(ed, &tv, EV_REL, REL_HWHEEL, dw);
+
+    put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
+    cuse_poll_wakeup();
+    obuttons = buttons;
 
     pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
   }

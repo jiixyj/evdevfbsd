@@ -273,149 +273,146 @@ void *psm_fill_function(struct event_device *ed) {
 
     switch (b->hw_info.model) {
       case MOUSE_MODEL_SYNAPTICS: {
-        if (event_device_nr_free_buffer(ed) >= 24) {
-          int w = ((packet[0] & 0x30) >> 2) | ((packet[0] & 0x04) >> 1) |
-                  ((packet[3] & 0x04) >> 2);
+        event_client_need_free_bufsize(ed, 24);
+        int w = ((packet[0] & 0x30) >> 2) | ((packet[0] & 0x04) >> 1) |
+                ((packet[3] & 0x04) >> 2);
 
-          // printf("%3d %3d %3d %3d %3d %3d %d\n", packet[0], packet[1],
-          //        packet[2], packet[3], packet[4], packet[5], w);
+        // printf("%3d %3d %3d %3d %3d %3d %d\n", packet[0], packet[1],
+        //        packet[2], packet[3], packet[4], packet[5], w);
 
-          if (w == 3) {
-            packet[0] = packet[1];
-            packet[1] = packet[4];
-            packet[2] = packet[5];
-            if (b->guest_dev_fd != -1) {
-              if (write_full_packet(b->guest_dev_fd, packet, 3) == -1) {
-                pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
-                return NULL;
-              }
-            }
-            break;
-          } else if (w == 2) {
-            synaptic_parse_ew_packet(ed, packet);
-            break;
-          }
-
-          int buttons = 0;
-          if (packet[0] & 0x01)
-            buttons |= (1 << 0);
-          if (packet[0] & 0x02)
-            buttons |= (1 << 1);
-
-          if (b->synaptics_info.capFourButtons) {
-            if ((packet[3] ^ packet[0]) & 0x01)
-              buttons |= (1 << 5);
-            if ((packet[3] ^ packet[0]) & 0x02)
-              buttons |= (1 << 6);
-          } else if (b->synaptics_info.capMiddle) {
-            if ((packet[0] ^ packet[3]) & 0x01)
-              buttons |= (1 << 2);
-          }
-
-          int x = (((packet[3] & 0x10) << 8) | ((packet[1] & 0x0f) << 8) |
-                   packet[4]);
-          int y = (((packet[3] & 0x20) << 7) | ((packet[1] & 0xf0) << 4) |
-                   packet[5]);
-          int z = packet[2];
-          int no_fingers = 0;
-          int finger_width = 0;
-          if (z > 0 && x > 1) {
-            no_fingers = 1;
-            finger_width = 5;
-            if (w <= 1 && (b->synaptics_info.capMultiFinger ||
-                           b->synaptics_info.capAdvancedGestures)) {
-              no_fingers = w + 2;
-            } else if (w >= 4 && w <= 15 && b->synaptics_info.capPalmDetect) {
-              finger_width = w;
+        if (w == 3) {
+          packet[0] = packet[1];
+          packet[1] = packet[4];
+          packet[2] = packet[5];
+          if (b->guest_dev_fd != -1) {
+            if (write_full_packet(b->guest_dev_fd, packet, 3) == -1) {
+              pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
+              return NULL;
             }
           }
-
-          struct timeval tv;
-          get_clock_value(ed, &tv);
-
-          put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
-          put_event(ed, &tv, EV_KEY, BTN_RIGHT, !!(buttons & (1 << 1)));
-          put_event(ed, &tv, EV_KEY, BTN_MIDDLE, !!(buttons & (1 << 2)));
-          put_event(ed, &tv, EV_KEY, BTN_FORWARD, !!(buttons & (1 << 5)));
-          put_event(ed, &tv, EV_KEY, BTN_BACK, !!(buttons & (1 << 6)));
-
-          if (b->synaptics_info.capAdvancedGestures) {
-            if (no_fingers >= 2) {
-              enable_mt_slot(ed, &tv, 0);
-              if (x > 1 && b->ews.x > 1)
-                put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X,
-                          MIN(x, b->ews.x));
-              if (y > 1 && b->ews.y > 1)
-                put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y,
-                          synaptics_inverse_y(MIN(y, b->ews.y)));
-
-              enable_mt_slot(ed, &tv, 1);
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, MAX(x, b->ews.x));
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y,
-                        synaptics_inverse_y(MAX(y, b->ews.y)));
-            } else if (no_fingers == 1) {
-              enable_mt_slot(ed, &tv, 0);
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, x);
-              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y,
-                        synaptics_inverse_y(y));
-              disable_mt_slot(ed, &tv, 1);
-            } else {
-              disable_mt_slot(ed, &tv, 0);
-              disable_mt_slot(ed, &tv, 1);
-            }
-          }
-
-          if (z > 30)
-            put_event(ed, &tv, EV_KEY, BTN_TOUCH, 1);
-          if (z < 25)
-            put_event(ed, &tv, EV_KEY, BTN_TOUCH, 0);
-          if (no_fingers > 0) {
-            if (x > 1)
-              put_event(ed, &tv, EV_ABS, ABS_X, x);
-            if (y > 1)
-              put_event(ed, &tv, EV_ABS, ABS_Y, synaptics_inverse_y(y));
-          }
-          put_event(ed, &tv, EV_ABS, ABS_PRESSURE, z);
-          if (b->synaptics_info.capPalmDetect)
-            put_event(ed, &tv, EV_ABS, ABS_TOOL_WIDTH, finger_width);
-
-          put_event(ed, &tv, EV_KEY, BTN_TOOL_FINGER, no_fingers == 1);
-          if (b->synaptics_info.capMultiFinger ||
-              b->synaptics_info.capAdvancedGestures) {
-            put_event(ed, &tv, EV_KEY, BTN_TOOL_DOUBLETAP, no_fingers == 2);
-            put_event(ed, &tv, EV_KEY, BTN_TOOL_TRIPLETAP, no_fingers == 3);
-          }
-
-          put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
-          cuse_poll_wakeup();
-          obuttons = buttons;
+          break;
+        } else if (w == 2) {
+          synaptic_parse_ew_packet(ed, packet);
           break;
         }
+
+        int buttons = 0;
+        if (packet[0] & 0x01)
+          buttons |= (1 << 0);
+        if (packet[0] & 0x02)
+          buttons |= (1 << 1);
+
+        if (b->synaptics_info.capFourButtons) {
+          if ((packet[3] ^ packet[0]) & 0x01)
+            buttons |= (1 << 5);
+          if ((packet[3] ^ packet[0]) & 0x02)
+            buttons |= (1 << 6);
+        } else if (b->synaptics_info.capMiddle) {
+          if ((packet[0] ^ packet[3]) & 0x01)
+            buttons |= (1 << 2);
+        }
+
+        int x = (((packet[3] & 0x10) << 8) | ((packet[1] & 0x0f) << 8) |
+                 packet[4]);
+        int y = (((packet[3] & 0x20) << 7) | ((packet[1] & 0xf0) << 4) |
+                 packet[5]);
+        int z = packet[2];
+        int no_fingers = 0;
+        int finger_width = 0;
+        if (z > 0 && x > 1) {
+          no_fingers = 1;
+          finger_width = 5;
+          if (w <= 1 && (b->synaptics_info.capMultiFinger ||
+                         b->synaptics_info.capAdvancedGestures)) {
+            no_fingers = w + 2;
+          } else if (w >= 4 && w <= 15 && b->synaptics_info.capPalmDetect) {
+            finger_width = w;
+          }
+        }
+
+        struct timeval tv;
+        get_clock_value(ed, &tv);
+
+        put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
+        put_event(ed, &tv, EV_KEY, BTN_RIGHT, !!(buttons & (1 << 1)));
+        put_event(ed, &tv, EV_KEY, BTN_MIDDLE, !!(buttons & (1 << 2)));
+        put_event(ed, &tv, EV_KEY, BTN_FORWARD, !!(buttons & (1 << 5)));
+        put_event(ed, &tv, EV_KEY, BTN_BACK, !!(buttons & (1 << 6)));
+
+        if (b->synaptics_info.capAdvancedGestures) {
+          if (no_fingers >= 2) {
+            enable_mt_slot(ed, &tv, 0);
+            if (x > 1 && b->ews.x > 1)
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, MIN(x, b->ews.x));
+            if (y > 1 && b->ews.y > 1)
+              put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y,
+                        synaptics_inverse_y(MIN(y, b->ews.y)));
+
+            enable_mt_slot(ed, &tv, 1);
+            put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, MAX(x, b->ews.x));
+            put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y,
+                      synaptics_inverse_y(MAX(y, b->ews.y)));
+          } else if (no_fingers == 1) {
+            enable_mt_slot(ed, &tv, 0);
+            put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_X, x);
+            put_event(ed, &tv, EV_ABS, ABS_MT_POSITION_Y,
+                      synaptics_inverse_y(y));
+            disable_mt_slot(ed, &tv, 1);
+          } else {
+            disable_mt_slot(ed, &tv, 0);
+            disable_mt_slot(ed, &tv, 1);
+          }
+        }
+
+        if (z > 30)
+          put_event(ed, &tv, EV_KEY, BTN_TOUCH, 1);
+        if (z < 25)
+          put_event(ed, &tv, EV_KEY, BTN_TOUCH, 0);
+        if (no_fingers > 0) {
+          if (x > 1)
+            put_event(ed, &tv, EV_ABS, ABS_X, x);
+          if (y > 1)
+            put_event(ed, &tv, EV_ABS, ABS_Y, synaptics_inverse_y(y));
+        }
+        put_event(ed, &tv, EV_ABS, ABS_PRESSURE, z);
+        if (b->synaptics_info.capPalmDetect)
+          put_event(ed, &tv, EV_ABS, ABS_TOOL_WIDTH, finger_width);
+
+        put_event(ed, &tv, EV_KEY, BTN_TOOL_FINGER, no_fingers == 1);
+        if (b->synaptics_info.capMultiFinger ||
+            b->synaptics_info.capAdvancedGestures) {
+          put_event(ed, &tv, EV_KEY, BTN_TOOL_DOUBLETAP, no_fingers == 2);
+          put_event(ed, &tv, EV_KEY, BTN_TOOL_TRIPLETAP, no_fingers == 3);
+        }
+
+        put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
+        cuse_poll_wakeup();
+        obuttons = buttons;
+        break;
       }
       case MOUSE_MODEL_GENERIC:
       case MOUSE_MODEL_TRACKPOINT: {
-        if (event_device_nr_free_buffer(ed) >= 6) {
-          int buttons = (packet[0] & 0x07);
-          int x = (packet[0] & (1 << 4)) ? packet[1] - 256 : packet[1];
-          int y = (packet[0] & (1 << 5)) ? packet[2] - 256 : packet[2];
-          y = -y;
+        event_client_need_free_bufsize(ed, 6);
+        int buttons = (packet[0] & 0x07);
+        int x = (packet[0] & (1 << 4)) ? packet[1] - 256 : packet[1];
+        int y = (packet[0] & (1 << 5)) ? packet[2] - 256 : packet[2];
+        y = -y;
 
-          struct timeval tv;
-          get_clock_value(ed, &tv);
+        struct timeval tv;
+        get_clock_value(ed, &tv);
 
-          put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
-          put_event(ed, &tv, EV_KEY, BTN_RIGHT, !!(buttons & (1 << 1)));
-          put_event(ed, &tv, EV_KEY, BTN_MIDDLE, !!(buttons & (1 << 2)));
+        put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
+        put_event(ed, &tv, EV_KEY, BTN_RIGHT, !!(buttons & (1 << 1)));
+        put_event(ed, &tv, EV_KEY, BTN_MIDDLE, !!(buttons & (1 << 2)));
 
-          if (x)
-            put_event(ed, &tv, EV_REL, REL_X, x);
-          if (y)
-            put_event(ed, &tv, EV_REL, REL_Y, y);
+        if (x)
+          put_event(ed, &tv, EV_REL, REL_X, x);
+        if (y)
+          put_event(ed, &tv, EV_REL, REL_Y, y);
 
-          put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
-          cuse_poll_wakeup();
-          obuttons = buttons;
-        }
+        put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
+        cuse_poll_wakeup();
+        obuttons = buttons;
       }
     }
 
