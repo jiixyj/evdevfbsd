@@ -341,28 +341,26 @@ static int event_device_init(struct event_device *ed) {
 }
 
 static int event_device_open(struct event_device *ed, char const *path) {
-  void *(*fill_function)(void *);
-
   if (!strcmp(path, "/dev/bpsm0") || !strcmp(path, "/dev/psm0")) {
     if (psm_backend_init(ed))
       return -1;
-    fill_function = (void *(*)(void *))psm_fill_function;
+    ed->fill_function = psm_fill_function;
     ed->backend_type = PSM_BACKEND;
   } else if (!strcmp(path, "/dev/sysmouse") || !strcmp(path, "/dev/ums0")) {
     if (sysmouse_backend_init(ed, path))
       return -1;
-    fill_function = (void *(*)(void *))sysmouse_fill_function;
+    ed->fill_function = sysmouse_fill_function;
     ed->backend_type = SYSMOUSE_BACKEND;
   } else if (!strcmp(path, "/dev/atkbd0")) {
     if (atkbd_backend_init(ed))
       return -1;
-    fill_function = (void *(*)(void *))atkbd_fill_function;
+    ed->fill_function = atkbd_fill_function;
     ed->backend_type = ATKBD_BACKEND;
   } else {
     return -EINVAL;
   }
 
-  return pthread_create(&ed->fill_thread, NULL, fill_function, ed);
+  return 0;
 }
 
 static void event_device_cleanup(struct event_device *ed) {
@@ -389,12 +387,38 @@ static int create_cuse_device(struct event_device *ed) {
   return 0;
 }
 
+static void *fill_thread_starter(void *edp) {
+  struct event_device *ed = (struct event_device *)edp;
+  return ed->fill_function(ed);
+}
+
+static void usage(char const *program_name) __attribute__ ((noreturn));
+static void usage(char const *program_name) {
+  fprintf(stderr, "usage: %s [-d] <device>\n", program_name);
+  exit(1);
+}
+
 int main(int argc, char **argv) {
+  char *program_name = argv[0];
+  int ch;
+  bool daemonize = false;
+
+  while ((ch = getopt(argc, argv, "d")) != -1) {
+    switch (ch) {
+      case 'd':
+        daemonize = true;
+        break;
+      default:
+        usage(argv[0]);
+    }
+  }
+  argc -= optind;
+  argv += optind;
+
   int ret;
 
-  if (argc != 2) {
-    fprintf(stderr, "usage: %s <device>\n", argv[0]);
-    exit(1);
+  if (argc != 1) {
+    usage(program_name);
   }
 
   if ((ret = cuse_init()) < 0)
@@ -402,8 +426,9 @@ int main(int argc, char **argv) {
 
   struct event_device ed;
   event_device_init(&ed); // XXX
-  if (event_device_open(&ed, argv[1]))
+  if (event_device_open(&ed, argv[0]))
     errx(1, "could not open event device");
+
 
   bool has_guest_device = false;
   struct event_device ed_guest;
@@ -423,6 +448,17 @@ int main(int argc, char **argv) {
   if (has_guest_device) {
     if (create_cuse_device(&ed_guest))
       errx(1, "failed to create event device");
+  }
+
+  if (daemonize && daemon(0, 0) == -1) {
+    perror("daemon");
+    errx(1, "failed to daemonize");
+  }
+
+  pthread_create(&ed.fill_thread, NULL, fill_thread_starter, &ed); // XXX
+  if (has_guest_device) {
+    pthread_create(&ed_guest.fill_thread, NULL, fill_thread_starter,
+                   &ed_guest); // XXX
   }
 
   pthread_t worker[4];

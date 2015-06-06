@@ -30,6 +30,7 @@ struct event_device {
   struct event_client_state *event_clients[8];
   pthread_mutex_t event_buffer_mutex;
   pthread_t fill_thread;
+  void *(*fill_function)(struct event_device *);
   uint16_t tracking_ids;
   int clock;
   int backend_type;

@@ -458,9 +458,10 @@ int event_device_open_as_guest(struct event_device *ed,
   b->guest_dev_fd = fds[1];
   pthread_mutex_unlock(&parent->event_buffer_mutex); // XXX
 
-  if (pthread_create(&ed->fill_thread, NULL,
-                     (void *(*)(void *))psm_fill_function, ed) == 0)
-    return 0;
+  ed->fill_function = psm_fill_function;
+  ed->backend_type = PSM_BACKEND;
+
+  return 0;
 
 fail:
   if (fds[0] != -1) {
