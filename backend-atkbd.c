@@ -164,11 +164,12 @@ void *atkbd_fill_function(struct event_device *ed) {
     if (ret == -1 || ret == 0)
       break;
 
+    struct timeval tv;
+    get_clock_value(ed, &tv);
+
     pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
 
     event_client_need_free_bufsize(ed, 8);
-    struct timeval tv;
-    get_clock_value(ed, &tv);
 
     uint16_t code = raw_code;
     bool release = false;

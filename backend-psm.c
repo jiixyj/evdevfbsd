@@ -269,6 +269,9 @@ void *psm_fill_function(struct event_device *ed) {
   unsigned char packet[PSM_PACKET_MAX_SIZE];
 
   while (psm_read_full_packet(ed, b->fd, packet, packetsize) == 0) {
+    struct timeval tv;
+    get_clock_value(ed, &tv);
+
     pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
 
     switch (b->hw_info.model) {
@@ -329,9 +332,6 @@ void *psm_fill_function(struct event_device *ed) {
             finger_width = w;
           }
         }
-
-        struct timeval tv;
-        get_clock_value(ed, &tv);
 
         put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
         put_event(ed, &tv, EV_KEY, BTN_RIGHT, !!(buttons & (1 << 1)));
@@ -397,9 +397,6 @@ void *psm_fill_function(struct event_device *ed) {
         int x = (packet[0] & (1 << 4)) ? packet[1] - 256 : packet[1];
         int y = (packet[0] & (1 << 5)) ? packet[2] - 256 : packet[2];
         y = -y;
-
-        struct timeval tv;
-        get_clock_value(ed, &tv);
 
         put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
         put_event(ed, &tv, EV_KEY, BTN_RIGHT, !!(buttons & (1 << 1)));

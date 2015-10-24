@@ -65,6 +65,9 @@ void *sysmouse_fill_function(struct event_device *ed) {
 
   while (read(b->fd, packet, (size_t)b->mode.packetsize) ==
          b->mode.packetsize) {
+    struct timeval tv;
+    get_clock_value(ed, &tv);
+
     pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
 
     event_client_need_free_bufsize(ed, 8);
@@ -90,9 +93,6 @@ void *sysmouse_fill_function(struct event_device *ed) {
       dz = -((int16_t)((packet[12] << 9) | (packet[13] << 2)) >> 2);
       dw = (int16_t)((packet[14] << 9) | (packet[15] << 2)) >> 2;
     }
-
-    struct timeval tv;
-    get_clock_value(ed, &tv);
 
     put_event(ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & MOUSE_SYS_BUTTON1UP));
     put_event(ed, &tv, EV_KEY, BTN_MIDDLE, !!(buttons & MOUSE_SYS_BUTTON2UP));
