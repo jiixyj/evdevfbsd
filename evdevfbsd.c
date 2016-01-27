@@ -379,7 +379,7 @@ static int create_cuse_device(struct event_device *ed) {
       break;
   }
 
-  ed->cuse_device = cuse_dev_create(&evdevfbsd_methods, ed, NULL, 0, 0, 0444,
+  ed->cuse_device = cuse_dev_create(&evdevfbsd_methods, ed, NULL, 0, 0, 0666,
                                     &device_name[5]);
   if (!ed->cuse_device)
     return -1;
