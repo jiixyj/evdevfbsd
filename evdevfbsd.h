@@ -28,6 +28,7 @@ struct event_client_state {
 struct event_device {
   int fd;
   struct event_client_state *event_clients[8];
+  struct event_client_state *exclusive_client;
   pthread_mutex_t event_buffer_mutex;
   pthread_t fill_thread;
   void *(*fill_function)(struct event_device *);

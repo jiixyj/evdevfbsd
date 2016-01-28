@@ -71,6 +71,9 @@ static int evdevfbsd_close(struct cuse_dev *cdev, int fflags __unused) {
   for (unsigned i = 0; i < nitems(ed->event_clients); ++i) {
     if (ed->event_clients[i] == client_state) {
       ed->event_clients[i] = NULL;
+      if (ed->exclusive_client == client_state) {
+        ed->exclusive_client = NULL;
+      }
       break;
     }
   }
@@ -174,10 +177,27 @@ static int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
       int version = EV_VERSION;
       return cuse_copy_out(&version, peer_data, sizeof(version));
     }
-    case EVIOCGRAB:
-      // Can be noop, event devices are always grabbed exclusively for now
+    case EVIOCGRAB: {
       // printf("GRAB: %p\n", peer_data);
+      struct event_client_state *client_state =
+          cuse_dev_get_per_file_handle(cdev);
+
+      if (peer_data) {
+        if (ed->exclusive_client != NULL) {
+          return CUSE_ERR_BUSY;
+        } else {
+          ed->exclusive_client = client_state;
+        }
+      } else {
+        if (ed->exclusive_client != client_state) {
+          return CUSE_ERR_INVALID;
+        } else {
+          ed->exclusive_client = NULL;
+        }
+      }
+
       return 0;
+    }
     case EVIOCSCLOCKID: {
       int new_clock, ret;
       if ((ret = cuse_copy_in(peer_data, &new_clock, sizeof(new_clock))))

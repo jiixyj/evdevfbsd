@@ -77,8 +77,10 @@ void put_event(struct event_device *ed, struct timeval *tv,
   for (unsigned i = 0; i < nitems(ed->event_clients); ++i) {
     struct input_event *buf;
     struct event_client_state *client_state = ed->event_clients[i];
-    if (!client_state)
+    if (!client_state ||
+        (ed->exclusive_client && client_state != ed->exclusive_client)) {
       continue;
+    }
 
     int needed_buffer = client_state->free_buffer_needed;
     if (needed_buffer < 1)
