@@ -217,12 +217,12 @@ static int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
 
   switch (base_cmd) {
     case EVIOCGBIT(0, 0): {
-      // printf("got ioctl EVIOCGBIT %d\n", len);
+      // printf("got ioctl EVIOCGBIT %lu\n", len);
       return cuse_copy_out(ed->event_bits, peer_data,
                            (int)MIN(sizeof(ed->event_bits), len));
     }
     case EVIOCGNAME(0): {
-      // printf("got ioctl EVIOCGNAME %d\n", len);
+      // printf("got ioctl EVIOCGNAME %lu\n", len);
       if (ed->device_name) {
         return cuse_copy_out(ed->device_name, peer_data,
                              (int)MIN(strlen(ed->device_name), len));
@@ -231,30 +231,30 @@ static int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
       }
     }
     case EVIOCGPHYS(0):
-      // printf("got ioctl EVIOCGPHYS %d\n", len);
+      // printf("got ioctl EVIOCGPHYS %lu\n", len);
       // ENOENT would be better, but that is not supported by cuse
       return 0;
     case EVIOCGUNIQ(0):
-      // printf("got ioctl EVIOCGUNIQ %d\n", len);
+      // printf("got ioctl EVIOCGUNIQ %lu\n", len);
       // ENOENT would be better, but that is not supported by cuse
       return 0;
     case EVIOCGBIT(EV_REL, 0): {
-      // printf("got ioctl EVIOCGBIT %d\n", len);
+      // printf("got ioctl EVIOCGBIT %lu\n", len);
       return cuse_copy_out(ed->rel_bits, peer_data,
                            (int)MIN(sizeof(ed->rel_bits), len));
     }
     case EVIOCGBIT(EV_KEY, 0): {
-      // printf("got ioctl EVIOCGBIT %d\n", len);
+      // printf("got ioctl EVIOCGBIT %lu\n", len);
       return cuse_copy_out(ed->key_bits, peer_data,
                            (int)MIN(sizeof(ed->key_bits), len));
     }
     case EVIOCGBIT(EV_ABS, 0): {
-      // printf("got ioctl EVIOCGBIT %d\n", len);
+      // printf("got ioctl EVIOCGBIT %lu\n", len);
       return cuse_copy_out(ed->abs_bits, peer_data,
                            (int)MIN(sizeof(ed->abs_bits), len));
     }
     case EVIOCGBIT(EV_MSC, 0): {
-      // printf("got ioctl EVIOCGBIT %d\n", len);
+      // printf("got ioctl EVIOCGBIT %lu\n", len);
       return cuse_copy_out(ed->msc_bits, peer_data,
                            (int)MIN(sizeof(ed->msc_bits), len));
     }
@@ -262,22 +262,25 @@ static int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
     case EVIOCGBIT(EV_SW, 0):
     case EVIOCGBIT(EV_FF, 0):
     case EVIOCGBIT(EV_SND, 0):
-      // printf("got ioctl EVIOCGBIT %d\n", len);
+      // printf("got ioctl EVIOCGBIT %lu\n", len);
       memset(bits, 0, sizeof(bits));
       return cuse_copy_out(bits, peer_data, (int)MIN(sizeof(bits), len));
     case EVIOCGKEY(0):
-      // printf("got ioctl EVIOCGKEY %d\n", len);
+      // TODO: implement this
+      // printf("got ioctl EVIOCGKEY %lu\n", len);
       return 0;
     case EVIOCGLED(0):
-      // printf("got ioctl EVIOCGLED %d\n", len);
+      // printf("got ioctl EVIOCGLED %lu\n", len);
       return 0;
     case EVIOCGSW(0):
-      // printf("got ioctl EVIOCGSW %d\n", len);
+      // printf("got ioctl EVIOCGSW %lu\n", len);
       return 0;
     case EVIOCGPROP(0):
+      // printf("got ioctl EVIOCGPROP %lu\n", len);
       return cuse_copy_out(ed->prop_bits, peer_data,
                            (int)MIN(sizeof(ed->prop_bits), len));
     case EVIOCGMTSLOTS(0): {
+      // printf("got ioctl EVIOCGMTSLOTS %lu\n", len);
       int ret;
       uint32_t code;
       if (len < sizeof(uint32_t))
@@ -304,7 +307,7 @@ static int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
 
   if ((cmd & IOC_DIRMASK) == IOC_OUT) {
     if ((cmd & ~(unsigned long)ABS_MAX) == EVIOCGABS(0)) {
-      // printf("got eviocgabs for axis %ld\n", cmd & ABS_MAX);
+      // printf("got ioctl EVIOCGABS for axis %ld\n", cmd & ABS_MAX);
       return cuse_copy_out(&ed->abs_info[cmd & ABS_MAX], peer_data,
                            (int)MIN(sizeof(struct input_absinfo), len));
     }

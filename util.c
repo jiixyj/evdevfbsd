@@ -47,8 +47,10 @@ void put_event(struct event_device *ed, struct timeval *tv,
   } else if (type == EV_ABS && code < ABS_MT_SLOT) {
     if (ed->abs_state[code] == value)
       return;
-    else
+    else {
       ed->abs_state[code] = value;
+      ed->abs_info[code].value = value;
+    }
   } else if (type == EV_ABS && code > ABS_MT_SLOT) {
     if (ed->current_mt_slot == -1) {
       // error

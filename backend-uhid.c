@@ -37,8 +37,12 @@ int uhid_backend_init(struct event_device *ed, char const *path) {
     goto fail;
   }
 
+reread:
   if (read(b->fd, dbuf, (unsigned)dlen) != dlen) {
     goto fail;
+  }
+  if (dbuf[0] != 1) {
+    goto reread;
   }
 
   struct hid_data *d;
@@ -55,25 +59,28 @@ int uhid_backend_init(struct event_device *ed, char const *path) {
       end_collection = true;
       break;
     case hid_input: {
+      int32_t data = hid_get_data(dbuf, &h);
       char const *usage_page = hid_usage_page(HID_PAGE(h.usage));
       char const *usage_in_page = hid_usage_in_page(h.usage);
       uint32_t usage = HID_USAGE(h.usage);
       if (!strcmp(usage_page, "Button")) {
         set_bit(ed->event_bits, EV_KEY);
         set_bit(ed->key_bits, BTN_JOYSTICK + (int)usage - 1);
+        ed->key_state[BTN_JOYSTICK + (int)usage - 1] = data;
       } else if (!strcmp(usage_page, "Generic_Desktop")) {
         if (!strcmp(usage_in_page, "X") || !strcmp(usage_in_page, "Y") ||
             !strcmp(usage_in_page, "Z") || !strcmp(usage_in_page, "Rz")) {
           set_bit(ed->event_bits, EV_ABS);
           int slot = usage & 0x0f;
           set_bit(ed->abs_bits, slot);
+          ed->abs_state[slot] = data;
+          ed->abs_info[slot].value = data;
           ed->abs_info[slot].minimum = h.logical_minimum;
           ed->abs_info[slot].maximum = h.logical_maximum;
           ed->abs_info[slot].fuzz =
               (h.logical_maximum - h.logical_minimum) >> 8;
           ed->abs_info[slot].flat =
               (h.logical_maximum - h.logical_minimum) >> 4;
-          // ed->abs_state[slot] = 128;
         }
       }
       break;
