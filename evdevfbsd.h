@@ -16,7 +16,7 @@
 #define ABS_MT_FIRST ABS_MT_TOUCH_MAJOR
 #define ABS_MT_LAST ABS_MT_TOOL_Y
 
-enum backends { PSM_BACKEND, SYSMOUSE_BACKEND, ATKBD_BACKEND };
+enum backends { PSM_BACKEND, SYSMOUSE_BACKEND, ATKBD_BACKEND, UHID_BACKEND };
 
 struct event_client_state {
   struct input_event event_buffer[EVENT_BUFFER_SIZE];

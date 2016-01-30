@@ -19,6 +19,7 @@
 #include "backend-psm.h"
 #include "backend-sysmouse.h"
 #include "backend-atkbd.h"
+#include "backend-uhid.h"
 
 static struct event_client_state *event_client_new() {
   struct event_client_state *ret =
@@ -376,6 +377,11 @@ static int event_device_open(struct event_device *ed, char const *path) {
       return -1;
     ed->fill_function = atkbd_fill_function;
     ed->backend_type = ATKBD_BACKEND;
+  } else if (!strcmp(path, "/dev/uhid0")) {
+    if (uhid_backend_init(ed, path))
+      return -1;
+    ed->fill_function = uhid_fill_function;
+    ed->backend_type = UHID_BACKEND;
   } else {
     return -EINVAL;
   }
