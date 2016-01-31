@@ -7,7 +7,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <unistd.h>
 
 #include "util.h"
@@ -24,7 +26,6 @@ struct uhid_backend {
   uint16_t hiditem_types[1024];
   size_t hiditems_used;
 };
-
 
 int uhid_backend_init(struct event_device *ed, char const *path) {
   ed->priv_ptr = malloc(sizeof(struct uhid_backend));
@@ -55,7 +56,18 @@ int uhid_backend_init(struct event_device *ed, char const *path) {
     goto fail;
   }
 
-reread:
+  // TODO: remove goto logic
+reread:;
+  struct pollfd pfd = {b->fd, POLLIN, 0};
+  int ret;
+  do {
+    ret = poll(&pfd, 1, 500);
+  } while (ret == -1 && errno == EINTR);
+  if (ret <= 0 || !(pfd.revents & POLLIN)) {
+    printf("skip initial HID packet...\n");
+    goto skip_reading;
+  }
+
   if (read(b->fd, dbuf, (unsigned)dlen) != dlen) {
     goto fail;
   }
@@ -63,6 +75,7 @@ reread:
     goto reread;
   }
 
+skip_reading:
   b->hiditems_used = 0;
   memset(b->hiditem_types, '\0', sizeof(b->hiditem_types));
 
