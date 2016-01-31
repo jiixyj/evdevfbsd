@@ -1,5 +1,8 @@
 #include "backend-uhid.h"
 
+#include <sys/types.h>
+#include <sys/sysctl.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -96,6 +99,15 @@ reread:
   }
   hid_end_parse(d);
   free(dbuf);
+
+  // TODO: fix this hack
+  static char desc[1024];
+  size_t siz = sizeof(desc) - 1;
+  if (sysctlbyname("dev.uhid.0.%desc", desc, &siz, NULL, 0) == -1) {
+    perror("sysctlbyname");
+    goto fail;
+  }
+  ed->device_name = desc;
 
   return 0;
 fail:
