@@ -82,10 +82,7 @@ int uhid_backend_init(struct event_device *ed, char const *path) {
     goto fail;
   }
 
-  uint8_t *dbuf = calloc((unsigned)dlen, 1);
-  if (!dbuf) {
-    goto fail;
-  }
+  uint8_t dbuf[1024] = {0};
 
   // TODO: remove goto logic
 reread:;
@@ -99,7 +96,21 @@ reread:;
     goto skip_reading;
   }
 
-  if (read(b->fd, dbuf, (unsigned)dlen) != dlen) {
+  if (use_rid) {
+    if (read(b->fd, dbuf, 1) != 1) {
+      goto fail;
+    }
+    dlen = hid_report_size(b->report_desc, hid_input, dbuf[0]);
+    if (dlen <= 1) {
+      goto fail;
+    }
+    --dlen;
+  }
+
+  if ((unsigned)dlen > sizeof(dbuf) - 1) {
+    abort();
+  }
+  if (read(b->fd, use_rid ? &dbuf[1] : dbuf, (unsigned)dlen) != dlen) {
     goto fail;
   }
   if (use_rid && dbuf[0] != 1) {
@@ -265,6 +276,16 @@ skip_reading:
 
           ++b->hiditems_used;
         }
+      } else if (!strcmp(usage_page, "Consumer")) {
+        if (!strcmp(usage_in_page, "AC_Pan")) {
+          b->hiditems[b->hiditems_used] = h;
+          int slot = b->hiditem_slots[b->hiditems_used] = REL_HWHEEL;
+          b->hiditem_types[b->hiditems_used] = EV_REL;
+
+          set_bit(ed->event_bits, EV_REL);
+          set_bit(ed->rel_bits, slot);
+          ++b->hiditems_used;
+        }
       }
       break;
     }
@@ -278,7 +299,6 @@ skip_reading:
     }
   }
   hid_end_parse(d);
-  free(dbuf);
 
   memset(b->desc, '\0', sizeof(b->desc));
   size_t siz = sizeof(b->desc) - 1;
@@ -306,12 +326,36 @@ void *uhid_fill_function(struct event_device *ed) {
     return NULL;
   }
 
-  uint8_t *dbuf = calloc((unsigned)dlen, 1);
-  if (!dbuf) {
-    return NULL;
-  }
+  for (;;) {
+    uint8_t dbuf[1024] = {0};
 
-  while (read(b->fd, dbuf, (unsigned)dlen) == dlen) {
+    if (use_rid) {
+      if (read(b->fd, dbuf, 1) != 1) {
+        break;
+      }
+      dlen = hid_report_size(b->report_desc, hid_input, dbuf[0]);
+      if (dlen <= 1) {
+        break;
+      }
+      --dlen;
+    }
+
+    if ((unsigned)dlen > sizeof(dbuf) - 1) {
+      abort();
+    }
+    if (read(b->fd, use_rid ? &dbuf[1] : dbuf, (unsigned)dlen) != dlen) {
+      break;
+    }
+#if 1
+    if (use_rid) {
+      ++dlen;
+    }
+    for (size_t i = 0; i < (unsigned)dlen; ++i) {
+      printf("%02x ", dbuf[i]);
+    }
+    printf("\n");
+#endif
+
     struct timeval tv;
     get_clock_value(ed, &tv);
 
@@ -402,6 +446,10 @@ void *uhid_fill_function(struct event_device *ed) {
                    !strcmp(usage_in_page, "Wheel")) {
           put_event(ed, &tv, type, slot, data);
         }
+      } else if (!strcmp(usage_page, "Consumer")) {
+        if (!strcmp(usage_in_page, "AC_Pan")) {
+          put_event(ed, &tv, type, slot, data);
+        }
       }
     }
 
@@ -410,8 +458,6 @@ void *uhid_fill_function(struct event_device *ed) {
 
     pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
   }
-
-  free(dbuf);
 
   return NULL;
 }
