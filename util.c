@@ -63,6 +63,10 @@ void put_event(struct event_device *ed, struct timeval *tv,
   } else if (type == EV_SYN) {
     if (ed->events_since_last_syn == 0)
       return;
+  } else if (type == EV_REL) {
+    if (value == 0) {
+      return;
+    }
   }
 
   if (code == ABS_MT_SLOT) {

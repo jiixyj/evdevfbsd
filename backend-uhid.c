@@ -21,6 +21,7 @@ struct uhid_backend {
 
   hid_item_t hiditems[1024];
   uint16_t hiditem_slots[1024];
+  uint16_t hiditem_types[1024];
   size_t hiditems_used;
 };
 
@@ -63,16 +64,25 @@ reread:
   }
 
   b->hiditems_used = 0;
+  memset(b->hiditem_types, '\0', sizeof(b->hiditem_types));
 
   struct hid_data *d;
   struct hid_item h;
 
   int collection_stack = 0;
+  char const* application_usage = NULL;
+  char const* physical_usage = NULL;
 
   for (d = hid_start_parse(b->report_desc, 1 << hid_input, -1);
        hid_get_item(d, &h);) {
     switch (h.kind) {
     case hid_collection:
+      if (h.collection == 1) {
+        application_usage = hid_usage_in_page(h.usage);
+      } else if (h.collection == 0) {
+        physical_usage = hid_usage_in_page(h.usage);
+      }
+
       ++collection_stack;
       break;
     case hid_endcollection:
@@ -86,9 +96,23 @@ reread:
       uint32_t usage = HID_USAGE(h.usage);
 
       if (!strcmp(usage_page, "Button")) {
+        if (application_usage == NULL) {
+          goto fail;
+        }
+
         b->hiditems[b->hiditems_used] = h;
-        int slot = b->hiditem_slots[b->hiditems_used] =
-            (uint16_t)(BTN_JOYSTICK + (int)usage - 1);
+        int slot;
+
+        if (!strcmp(application_usage, "Mouse")) {
+          slot = b->hiditem_slots[b->hiditems_used] =
+              (uint16_t)(BTN_MOUSE + (int)usage - 1);
+        } else if (!strcmp(application_usage, "Joystick")) {
+          slot = b->hiditem_slots[b->hiditems_used] =
+              (uint16_t)(BTN_JOYSTICK + (int)usage - 1);
+        } else {
+          goto fail;
+        }
+
         ++b->hiditems_used;
 
         set_bit(ed->event_bits, EV_KEY);
@@ -99,18 +123,26 @@ reread:
             !strcmp(usage_in_page, "Z") || !strcmp(usage_in_page, "Rz")) {
           b->hiditems[b->hiditems_used] = h;
           int slot = b->hiditem_slots[b->hiditems_used] = usage & 0x0f;
-          ++b->hiditems_used;
 
-          set_bit(ed->event_bits, EV_ABS);
-          set_bit(ed->abs_bits, slot);
-          ed->abs_state[slot] = data;
-          ed->abs_info[slot].value = data;
-          ed->abs_info[slot].minimum = h.logical_minimum;
-          ed->abs_info[slot].maximum = h.logical_maximum;
-          ed->abs_info[slot].fuzz =
-              (h.logical_maximum - h.logical_minimum) >> 8;
-          ed->abs_info[slot].flat =
-              (h.logical_maximum - h.logical_minimum) >> 4;
+          if (h.flags & HIO_RELATIVE) {
+            b->hiditem_types[b->hiditems_used] = EV_REL;
+            set_bit(ed->event_bits, EV_REL);
+            set_bit(ed->rel_bits, slot);
+          } else {
+            b->hiditem_types[b->hiditems_used] = EV_ABS;
+            set_bit(ed->event_bits, EV_ABS);
+            set_bit(ed->abs_bits, slot);
+            ed->abs_state[slot] = data;
+            ed->abs_info[slot].value = data;
+            ed->abs_info[slot].minimum = h.logical_minimum;
+            ed->abs_info[slot].maximum = h.logical_maximum;
+            ed->abs_info[slot].fuzz =
+                (h.logical_maximum - h.logical_minimum) >> 8;
+            ed->abs_info[slot].flat =
+                (h.logical_maximum - h.logical_minimum) >> 4;
+          }
+
+          ++b->hiditems_used;
         } else if (!strcmp(usage_in_page, "Hat_Switch")) {
           b->hiditems[b->hiditems_used] = h;
           b->hiditem_slots[b->hiditems_used] = ABS_HAT0X;
@@ -125,14 +157,19 @@ reread:
             ed->abs_info[slot].minimum = -1;
             ed->abs_info[slot].maximum = 1;
           }
-        } else if (!strcmp(usage_in_page, "Slider")) {
-          if (h.flags & HIO_RELATIVE) {
-            // TODO
-          } else {
-            b->hiditems[b->hiditems_used] = h;
-            int slot = b->hiditem_slots[b->hiditems_used] = usage & 0x0f;
-            ++b->hiditems_used;
+        } else if (!strcmp(usage_in_page, "Slider") ||
+                   !strcmp(usage_in_page, "Wheel")) {
+          // TODO: there can be multiple slider/wheels that should map to
+          // different slots.
+          b->hiditems[b->hiditems_used] = h;
+          int slot = b->hiditem_slots[b->hiditems_used] = usage & 0x0f;
 
+          if (h.flags & HIO_RELATIVE) {
+            b->hiditem_types[b->hiditems_used] = EV_REL;
+            set_bit(ed->event_bits, EV_REL);
+            set_bit(ed->rel_bits, slot);
+          } else {
+            b->hiditem_types[b->hiditems_used] = EV_ABS;
             set_bit(ed->event_bits, EV_ABS);
             set_bit(ed->abs_bits, slot);
             ed->abs_state[slot] = data;
@@ -144,6 +181,8 @@ reread:
             ed->abs_info[slot].flat =
                 (h.logical_maximum - h.logical_minimum) >> 4;
           }
+
+          ++b->hiditems_used;
         }
       }
       break;
@@ -212,6 +251,7 @@ void *uhid_fill_function(struct event_device *ed) {
     for (size_t i = 0; i < b->hiditems_used; ++i) {
       hid_item_t h = b->hiditems[i];
       uint16_t slot = b->hiditem_slots[i];
+      uint16_t type = b->hiditem_types[i];
 
       int32_t data = hid_get_data(dbuf, &h);
       char const *usage_page = hid_usage_page(HID_PAGE(h.usage));
@@ -222,7 +262,7 @@ void *uhid_fill_function(struct event_device *ed) {
       } else if (!strcmp(usage_page, "Generic_Desktop")) {
         if (!strcmp(usage_in_page, "X") || !strcmp(usage_in_page, "Y") ||
             !strcmp(usage_in_page, "Z") || !strcmp(usage_in_page, "Rz")) {
-          put_event(ed, &tv, EV_ABS, slot, data);
+          put_event(ed, &tv, type, slot, data);
         } else if (!strcmp(usage_in_page, "Hat_Switch")) {
           int hat_dir = (data - h.logical_minimum) * 8 /
                             (h.logical_maximum - h.logical_minimum + 1) +
@@ -232,8 +272,9 @@ void *uhid_fill_function(struct event_device *ed) {
           }
           put_event(ed, &tv, EV_ABS, slot, hat_to_axis[hat_dir].x);
           put_event(ed, &tv, EV_ABS, slot + 1, hat_to_axis[hat_dir].y);
-        } else if (!strcmp(usage_in_page, "Slider")) {
-          put_event(ed, &tv, EV_ABS, slot, data);
+        } else if (!strcmp(usage_in_page, "Slider") ||
+                   !strcmp(usage_in_page, "Wheel")) {
+          put_event(ed, &tv, type, slot, data);
         }
       }
     }
