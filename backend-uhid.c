@@ -24,8 +24,39 @@ struct uhid_backend {
   hid_item_t hiditems[1024];
   uint16_t hiditem_slots[1024];
   uint16_t hiditem_types[1024];
+  int32_t *hiditem_array[1024];
   size_t hiditems_used;
 };
+
+static const struct {
+  int32_t x;
+  int32_t y;
+} hat_to_axis[] = {{0, 0}, {0, -1}, {1, -1}, {1, 0},  {1, 1},
+                   {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
+
+#define KU KEY_UNKNOWN
+
+static const unsigned char hid_to_evdev[256] = {
+    0,   0,   0,   0,   30,  48,  46,  32,  18,  33,  34,  35,  23,  36,  37,
+    38,  50,  49,  24,  25,  16,  19,  31,  20,  22,  47,  17,  45,  21,  44,
+    2,   3,   4,   5,   6,   7,   8,   9,   10,  11,  28,  1,   14,  15,  57,
+    12,  13,  26,  27,  43,  43,  39,  40,  41,  51,  52,  53,  58,  59,  60,
+    61,  62,  63,  64,  65,  66,  67,  68,  87,  88,  99,  70,  119, 110, 102,
+    104, 111, 107, 109, 106, 105, 108, 103, 69,  98,  55,  74,  78,  96,  79,
+    80,  81,  75,  76,  77,  71,  72,  73,  82,  83,  86,  127, 116, 117, 183,
+    184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 134, 138, 130, 132,
+    128, 129, 131, 137, 133, 135, 136, 113, 115, 114, KU,  KU,  KU,  121, KU,
+    89,  93,  124, 92,  94,  95,  KU,  KU,  KU,  122, 123, 90,  91,  85,  KU,
+    KU,  KU,  KU,  KU,  KU,  KU,  111, KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,
+    KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,
+    KU,  KU,  179, 180, KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,
+    KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,  KU,
+    KU,  KU,  KU,  KU,  KU,  KU,  111, KU,  KU,  KU,  KU,  KU,  KU,  KU,  29,
+    42,  56,  125, 97,  54,  100, 126, 164, 166, 165, 163, 161, 115, 114, 113,
+    150, 158, 159, 128, 136, 177, 178, 176, 142, 152, 173, 140, KU,  KU,  KU,
+    KU};
+
+#undef KU
 
 int uhid_backend_init(struct event_device *ed, char const *path) {
   ed->priv_ptr = malloc(sizeof(struct uhid_backend));
@@ -108,7 +139,44 @@ skip_reading:
       char const *usage_in_page = hid_usage_in_page(h.usage);
       uint32_t usage = HID_USAGE(h.usage);
 
-      if (!strcmp(usage_page, "Button")) {
+      if (!strcmp(usage_page, "Keyboard")) {
+        if (h.report_count == 1) {
+          if (usage < 256) {
+            if (!hid_to_evdev[usage]) {
+              break;
+            }
+            b->hiditems[b->hiditems_used] = h;
+            int slot = b->hiditem_slots[b->hiditems_used] =
+                hid_to_evdev[usage];
+            ++b->hiditems_used;
+
+            set_bit(ed->event_bits, EV_KEY);
+            set_bit(ed->key_bits, slot);
+            ed->key_state[slot] = data;
+          } else {
+            // TODO: fix reporting of unknown keys
+          }
+        } else if (h.report_count > 1 && usage == 0) {
+          if (h.logical_minimum > h.logical_maximum) {
+            break;
+          }
+          b->hiditems[b->hiditems_used] = h;
+          b->hiditem_slots[b->hiditems_used] = 0;
+          b->hiditem_array[b->hiditems_used] =
+              calloc((uint32_t)h.report_count * sizeof(int), 1);
+          if (!b->hiditem_array[b->hiditems_used]) {
+            goto fail;
+          }
+          ++b->hiditems_used;
+          for (int i = h.logical_minimum; i <= h.logical_maximum; ++i) {
+            if (i < 0 || i > 255 || !hid_to_evdev[i]) {
+              continue;
+            }
+            set_bit(ed->event_bits, EV_KEY);
+            set_bit(ed->key_bits, hid_to_evdev[i]);
+          }
+        }
+      } else if (!strcmp(usage_page, "Button")) {
         if (application_usage == NULL) {
           goto fail;
         }
@@ -228,12 +296,6 @@ fail:
   return 1;
 }
 
-static const struct {
-  int32_t x;
-  int32_t y;
-} hat_to_axis[] = {{0, 0}, {0, -1}, {1, -1}, {1, 0},  {1, 1},
-                             {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
-
 void *uhid_fill_function(struct event_device *ed) {
   struct uhid_backend *b = ed->priv_ptr;
 
@@ -270,7 +332,58 @@ void *uhid_fill_function(struct event_device *ed) {
       char const *usage_page = hid_usage_page(HID_PAGE(h.usage));
       char const *usage_in_page = hid_usage_in_page(h.usage);
 
-      if (!strcmp(usage_page, "Button")) {
+      if (!strcmp(usage_page, "Keyboard")) {
+        if (h.report_count == 1) {
+          put_event(ed, &tv, EV_KEY, slot, data);
+        } else if (h.report_count > 1) {
+          int32_t new_keys[128] = {0};
+          if (h.report_count > 128) {
+            abort();
+          }
+          int32_t *old_keys = b->hiditem_array[i];
+          uint32_t old_pos = h.pos;
+          for (int r = 0; r < h.report_count; ++r) {
+            data = hid_get_data(dbuf, &h);
+
+            if (data >= 0 && data <= 255) {
+              new_keys[r] = data;
+              bool is_in_old_data = false;
+              for (int p = 0; p < h.report_count; ++p) {
+                if (data == old_keys[p]) {
+                  is_in_old_data = true;
+                  break;
+                }
+              }
+
+              if (!is_in_old_data && hid_to_evdev[data]) {
+                put_event(ed, &tv, EV_KEY, hid_to_evdev[data], 1);
+              }
+            }
+
+            if (h.report_size < 0) {
+              abort();
+            }
+            h.pos += (uint32_t)h.report_size;
+          }
+          h.pos = old_pos;
+
+          for (int r = 0; r < h.report_count; ++r) {
+            bool is_in_new_data = false;
+            for (int p = 0; p < h.report_count; ++p) {
+              if (old_keys[r] == new_keys[p]) {
+                is_in_new_data = true;
+                break;
+              }
+            }
+            if (!is_in_new_data && hid_to_evdev[old_keys[r]]) {
+              put_event(ed, &tv, EV_KEY, hid_to_evdev[old_keys[r]], 0);
+            }
+          }
+          for (int r = 0; r < h.report_count; ++r) {
+            old_keys[r] = new_keys[r];
+          }
+        }
+      } else if (!strcmp(usage_page, "Button")) {
         put_event(ed, &tv, EV_KEY, slot, data);
       } else if (!strcmp(usage_page, "Generic_Desktop")) {
         if (!strcmp(usage_in_page, "X") || !strcmp(usage_in_page, "Y") ||
