@@ -346,7 +346,7 @@ void *uhid_fill_function(struct event_device *ed) {
     if (read(b->fd, use_rid ? &dbuf[1] : dbuf, (unsigned)dlen) != dlen) {
       break;
     }
-#if 1
+#if 0
     if (use_rid) {
       ++dlen;
     }
