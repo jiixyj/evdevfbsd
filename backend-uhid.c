@@ -30,6 +30,8 @@ int uhid_backend_init(struct event_device *ed, char const *path) {
   if (b->report_desc == 0)
     goto fail;
 
+  bool use_rid = !!hid_get_report_id(b->fd);
+
   int dlen = hid_report_size(b->report_desc, hid_input, -1);
   if (dlen <= 0) {
     goto fail;
@@ -44,22 +46,23 @@ reread:
   if (read(b->fd, dbuf, (unsigned)dlen) != dlen) {
     goto fail;
   }
-  if (dbuf[0] != 1) {
+  if (use_rid && dbuf[0] != 1) {
     goto reread;
   }
 
   struct hid_data *d;
   struct hid_item h;
 
-  bool end_collection = false;
+  int collection_stack = 0;
 
   for (d = hid_start_parse(b->report_desc, 1 << hid_input, -1);
        hid_get_item(d, &h);) {
     switch (h.kind) {
     case hid_collection:
+      ++collection_stack;
       break;
     case hid_endcollection:
-      end_collection = true;
+      --collection_stack;
       break;
     case hid_input: {
       int32_t data = hid_get_data(dbuf, &h);
@@ -84,6 +87,32 @@ reread:
               (h.logical_maximum - h.logical_minimum) >> 8;
           ed->abs_info[slot].flat =
               (h.logical_maximum - h.logical_minimum) >> 4;
+        } else if (!strcmp(usage_in_page, "Hat_Switch")) {
+          set_bit(ed->event_bits, EV_ABS);
+          for (int slot = ABS_HAT0X; slot <= ABS_HAT0Y; ++slot) {
+            set_bit(ed->abs_bits, slot);
+            // TODO: set these to proper value
+            ed->abs_state[slot] = 0;
+            ed->abs_info[slot].value = 0;
+            ed->abs_info[slot].minimum = -1;
+            ed->abs_info[slot].maximum = 1;
+          }
+        } else if (!strcmp(usage_in_page, "Slider")) {
+          if (h.flags & HIO_RELATIVE) {
+            // TODO
+          } else {
+            set_bit(ed->event_bits, EV_ABS);
+            int slot = usage & 0x0f;
+            set_bit(ed->abs_bits, slot);
+            ed->abs_state[slot] = data;
+            ed->abs_info[slot].value = data;
+            ed->abs_info[slot].minimum = h.logical_minimum;
+            ed->abs_info[slot].maximum = h.logical_maximum;
+            ed->abs_info[slot].fuzz =
+                (h.logical_maximum - h.logical_minimum) >> 8;
+            ed->abs_info[slot].flat =
+                (h.logical_maximum - h.logical_minimum) >> 4;
+          }
         }
       }
       break;
@@ -93,7 +122,7 @@ reread:
       break;
     }
 
-    if (end_collection) {
+    if (collection_stack == 0) {
       break;
     }
   }
@@ -115,8 +144,16 @@ fail:
   return 1;
 }
 
+static const struct {
+  int32_t x;
+  int32_t y;
+} hat_direction_to_axis[] = {{0, 0}, {0, -1}, {1, -1}, {1, 0},  {1, 1},
+                             {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
+
 void *uhid_fill_function(struct event_device *ed) {
   struct uhid_backend *b = ed->priv_ptr;
+
+  bool use_rid = !!hid_get_report_id(b->fd);
 
   int dlen = hid_report_size(b->report_desc, hid_input, -1);
   if (dlen <= 0) {
@@ -132,7 +169,7 @@ void *uhid_fill_function(struct event_device *ed) {
     struct timeval tv;
     get_clock_value(ed, &tv);
 
-    if (dbuf[0] != 1) {
+    if (use_rid && dbuf[0] != 1) {
       continue;
     }
 
@@ -143,15 +180,16 @@ void *uhid_fill_function(struct event_device *ed) {
     struct hid_data *d;
     struct hid_item h;
 
-    bool end_collection = false;
+    int collection_stack = 0;
 
     for (d = hid_start_parse(b->report_desc, 1 << hid_input, -1);
          hid_get_item(d, &h);) {
       switch (h.kind) {
       case hid_collection:
+        ++collection_stack;
         break;
       case hid_endcollection:
-        end_collection = true;
+        --collection_stack;
         break;
       case hid_input: {
         int32_t data = hid_get_data(dbuf, &h);
@@ -166,6 +204,20 @@ void *uhid_fill_function(struct event_device *ed) {
               !strcmp(usage_in_page, "Z") || !strcmp(usage_in_page, "Rz")) {
             uint16_t slot = usage & 0x0f;
             put_event(ed, &tv, EV_ABS, slot, data);
+          } else if (!strcmp(usage_in_page, "Hat_Switch")) {
+            int hat_dir = (data - h.logical_minimum) * 8 /
+                              (h.logical_maximum - h.logical_minimum + 1) +
+                          1;
+            if (hat_dir < 0 || hat_dir > 8) {
+              hat_dir = 0;
+            }
+            put_event(ed, &tv, EV_ABS, ABS_HAT0X,
+                      hat_direction_to_axis[hat_dir].x);
+            put_event(ed, &tv, EV_ABS, ABS_HAT0Y,
+                      hat_direction_to_axis[hat_dir].y);
+          } else if (!strcmp(usage_in_page, "Slider")) {
+            uint16_t slot = usage & 0x0f;
+            put_event(ed, &tv, EV_ABS, slot, data);
           }
         }
         break;
@@ -175,7 +227,7 @@ void *uhid_fill_function(struct event_device *ed) {
         break;
       }
 
-      if (end_collection) {
+      if (collection_stack == 0) {
         break;
       }
     }
