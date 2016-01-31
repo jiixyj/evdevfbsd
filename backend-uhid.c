@@ -10,8 +10,20 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include "backend-psm.h"
 #include "util.h"
+
+
+struct uhid_backend {
+  int fd;
+  report_desc_t report_desc;
+  char desc[1024];
+  char path[32];
+
+  hid_item_t hiditems[1024];
+  uint16_t hiditem_slots[1024];
+  size_t hiditems_used;
+};
+
 
 int uhid_backend_init(struct event_device *ed, char const *path) {
   ed->priv_ptr = malloc(sizeof(struct uhid_backend));
@@ -50,6 +62,8 @@ reread:
     goto reread;
   }
 
+  b->hiditems_used = 0;
+
   struct hid_data *d;
   struct hid_item h;
 
@@ -65,19 +79,29 @@ reread:
       --collection_stack;
       break;
     case hid_input: {
+
       int32_t data = hid_get_data(dbuf, &h);
       char const *usage_page = hid_usage_page(HID_PAGE(h.usage));
       char const *usage_in_page = hid_usage_in_page(h.usage);
       uint32_t usage = HID_USAGE(h.usage);
+
       if (!strcmp(usage_page, "Button")) {
+        b->hiditems[b->hiditems_used] = h;
+        int slot = b->hiditem_slots[b->hiditems_used] =
+            (uint16_t)(BTN_JOYSTICK + (int)usage - 1);
+        ++b->hiditems_used;
+
         set_bit(ed->event_bits, EV_KEY);
-        set_bit(ed->key_bits, BTN_JOYSTICK + (int)usage - 1);
-        ed->key_state[BTN_JOYSTICK + (int)usage - 1] = data;
+        set_bit(ed->key_bits, slot);
+        ed->key_state[slot] = data;
       } else if (!strcmp(usage_page, "Generic_Desktop")) {
         if (!strcmp(usage_in_page, "X") || !strcmp(usage_in_page, "Y") ||
             !strcmp(usage_in_page, "Z") || !strcmp(usage_in_page, "Rz")) {
+          b->hiditems[b->hiditems_used] = h;
+          int slot = b->hiditem_slots[b->hiditems_used] = usage & 0x0f;
+          ++b->hiditems_used;
+
           set_bit(ed->event_bits, EV_ABS);
-          int slot = usage & 0x0f;
           set_bit(ed->abs_bits, slot);
           ed->abs_state[slot] = data;
           ed->abs_info[slot].value = data;
@@ -88,6 +112,10 @@ reread:
           ed->abs_info[slot].flat =
               (h.logical_maximum - h.logical_minimum) >> 4;
         } else if (!strcmp(usage_in_page, "Hat_Switch")) {
+          b->hiditems[b->hiditems_used] = h;
+          b->hiditem_slots[b->hiditems_used] = ABS_HAT0X;
+          ++b->hiditems_used;
+
           set_bit(ed->event_bits, EV_ABS);
           for (int slot = ABS_HAT0X; slot <= ABS_HAT0Y; ++slot) {
             set_bit(ed->abs_bits, slot);
@@ -101,8 +129,11 @@ reread:
           if (h.flags & HIO_RELATIVE) {
             // TODO
           } else {
+            b->hiditems[b->hiditems_used] = h;
+            int slot = b->hiditem_slots[b->hiditems_used] = usage & 0x0f;
+            ++b->hiditems_used;
+
             set_bit(ed->event_bits, EV_ABS);
-            int slot = usage & 0x0f;
             set_bit(ed->abs_bits, slot);
             ed->abs_state[slot] = data;
             ed->abs_info[slot].value = data;
@@ -129,14 +160,15 @@ reread:
   hid_end_parse(d);
   free(dbuf);
 
-  // TODO: fix this hack
-  static char desc[1024];
-  size_t siz = sizeof(desc) - 1;
-  if (sysctlbyname("dev.uhid.0.%desc", desc, &siz, NULL, 0) == -1) {
+  memset(b->desc, '\0', sizeof(b->desc));
+  size_t siz = sizeof(b->desc) - 1;
+  char sysctl_name[64] = {0};
+  snprintf(sysctl_name, sizeof(sysctl_name), "dev.uhid.%c.%%desc", path[9]);
+  if (sysctlbyname(sysctl_name, b->desc, &siz, NULL, 0) == -1) {
     perror("sysctlbyname");
     goto fail;
   }
-  ed->device_name = desc;
+  ed->device_name = b->desc;
 
   return 0;
 fail:
@@ -147,7 +179,7 @@ fail:
 static const struct {
   int32_t x;
   int32_t y;
-} hat_direction_to_axis[] = {{0, 0}, {0, -1}, {1, -1}, {1, 0},  {1, 1},
+} hat_to_axis[] = {{0, 0}, {0, -1}, {1, -1}, {1, 0},  {1, 1},
                              {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
 
 void *uhid_fill_function(struct event_device *ed) {
@@ -177,58 +209,32 @@ void *uhid_fill_function(struct event_device *ed) {
 
     event_client_need_free_bufsize(ed, 32);
 
-    struct hid_data *d;
-    struct hid_item h;
+    for (size_t i = 0; i < b->hiditems_used; ++i) {
+      hid_item_t h = b->hiditems[i];
+      uint16_t slot = b->hiditem_slots[i];
 
-    int collection_stack = 0;
+      int32_t data = hid_get_data(dbuf, &h);
+      char const *usage_page = hid_usage_page(HID_PAGE(h.usage));
+      char const *usage_in_page = hid_usage_in_page(h.usage);
 
-    for (d = hid_start_parse(b->report_desc, 1 << hid_input, -1);
-         hid_get_item(d, &h);) {
-      switch (h.kind) {
-      case hid_collection:
-        ++collection_stack;
-        break;
-      case hid_endcollection:
-        --collection_stack;
-        break;
-      case hid_input: {
-        int32_t data = hid_get_data(dbuf, &h);
-        char const *usage_page = hid_usage_page(HID_PAGE(h.usage));
-        char const *usage_in_page = hid_usage_in_page(h.usage);
-        uint32_t usage = HID_USAGE(h.usage);
-        if (!strcmp(usage_page, "Button")) {
-          put_event(ed, &tv, EV_KEY, (uint16_t)(BTN_JOYSTICK + (int)usage - 1),
-                    data);
-        } else if (!strcmp(usage_page, "Generic_Desktop")) {
-          if (!strcmp(usage_in_page, "X") || !strcmp(usage_in_page, "Y") ||
-              !strcmp(usage_in_page, "Z") || !strcmp(usage_in_page, "Rz")) {
-            uint16_t slot = usage & 0x0f;
-            put_event(ed, &tv, EV_ABS, slot, data);
-          } else if (!strcmp(usage_in_page, "Hat_Switch")) {
-            int hat_dir = (data - h.logical_minimum) * 8 /
-                              (h.logical_maximum - h.logical_minimum + 1) +
-                          1;
-            if (hat_dir < 0 || hat_dir > 8) {
-              hat_dir = 0;
-            }
-            put_event(ed, &tv, EV_ABS, ABS_HAT0X,
-                      hat_direction_to_axis[hat_dir].x);
-            put_event(ed, &tv, EV_ABS, ABS_HAT0Y,
-                      hat_direction_to_axis[hat_dir].y);
-          } else if (!strcmp(usage_in_page, "Slider")) {
-            uint16_t slot = usage & 0x0f;
-            put_event(ed, &tv, EV_ABS, slot, data);
+      if (!strcmp(usage_page, "Button")) {
+        put_event(ed, &tv, EV_KEY, slot, data);
+      } else if (!strcmp(usage_page, "Generic_Desktop")) {
+        if (!strcmp(usage_in_page, "X") || !strcmp(usage_in_page, "Y") ||
+            !strcmp(usage_in_page, "Z") || !strcmp(usage_in_page, "Rz")) {
+          put_event(ed, &tv, EV_ABS, slot, data);
+        } else if (!strcmp(usage_in_page, "Hat_Switch")) {
+          int hat_dir = (data - h.logical_minimum) * 8 /
+                            (h.logical_maximum - h.logical_minimum + 1) +
+                        1;
+          if (hat_dir < 0 || hat_dir > 8) {
+            hat_dir = 0;
           }
+          put_event(ed, &tv, EV_ABS, slot, hat_to_axis[hat_dir].x);
+          put_event(ed, &tv, EV_ABS, slot + 1, hat_to_axis[hat_dir].y);
+        } else if (!strcmp(usage_in_page, "Slider")) {
+          put_event(ed, &tv, EV_ABS, slot, data);
         }
-        break;
-      }
-      case hid_output:
-      case hid_feature:
-        break;
-      }
-
-      if (collection_stack == 0) {
-        break;
       }
     }
 
