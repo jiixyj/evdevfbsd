@@ -21,6 +21,8 @@
 #include "backend-atkbd.h"
 #include "backend-uhid.h"
 
+static volatile sig_atomic_t hup_catched = 0;
+
 static struct event_client_state *event_client_new() {
   struct event_client_state *ret =
       calloc(sizeof(struct event_client_state), 1);
@@ -104,7 +106,7 @@ static int evdevfbsd_read(struct cuse_dev *cdev, int fflags, void *user_ptr,
 retry:
   if (!(fflags & CUSE_FFLAG_NONBLOCK)) {
     ret = sem_wait(&client_state->event_buffer_sem);
-    if (ret == -1 && cuse_got_peer_signal() == 0)
+    if (ret == -1 && (cuse_got_peer_signal() == 0 || hup_catched))
       return CUSE_ERR_SIGNAL;
   }
 
@@ -334,7 +336,9 @@ static struct cuse_methods evdevfbsd_methods = {.cm_open = evdevfbsd_open,
                                                 .cm_poll = evdevfbsd_poll,
                                                 .cm_ioctl = evdevfbsd_ioctl};
 
-static void evdevfbsd_hup_catcher(int dummy __unused) {}
+static void evdevfbsd_hup_catcher(int dummy __unused) {
+  hup_catched = 1;
+}
 
 static void *wait_and_proc(void *notused __unused) {
   int ret;
@@ -344,7 +348,7 @@ static void *wait_and_proc(void *notused __unused) {
   act.sa_handler = &evdevfbsd_hup_catcher;
   sigaction(SIGHUP, &act, NULL); // XXX
 
-  for (;;) {
+  while (!hup_catched) {
     ret = cuse_wait_and_process();
     if (ret < 0)
       break;
