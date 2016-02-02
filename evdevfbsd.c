@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,7 +22,7 @@
 #include "backend-atkbd.h"
 #include "backend-uhid.h"
 
-static volatile sig_atomic_t hup_catched = 0;
+static atomic_int is_exiting = 0;
 
 static struct event_client_state *event_client_new() {
   struct event_client_state *ret =
@@ -106,7 +107,7 @@ static int evdevfbsd_read(struct cuse_dev *cdev, int fflags, void *user_ptr,
 retry:
   if (!(fflags & CUSE_FFLAG_NONBLOCK)) {
     ret = sem_wait(&client_state->event_buffer_sem);
-    if (ret == -1 && (cuse_got_peer_signal() == 0 || hup_catched))
+    if (ret == -1 && (cuse_got_peer_signal() == 0 || is_exiting))
       return CUSE_ERR_SIGNAL;
   }
 
@@ -336,9 +337,7 @@ static struct cuse_methods evdevfbsd_methods = {.cm_open = evdevfbsd_open,
                                                 .cm_poll = evdevfbsd_poll,
                                                 .cm_ioctl = evdevfbsd_ioctl};
 
-static void evdevfbsd_hup_catcher(int dummy __unused) {
-  hup_catched = 1;
-}
+static void evdevfbsd_hup_catcher(int dummy __unused) {}
 
 static void *wait_and_proc(void *notused __unused) {
   int ret;
@@ -348,7 +347,7 @@ static void *wait_and_proc(void *notused __unused) {
   act.sa_handler = &evdevfbsd_hup_catcher;
   sigaction(SIGHUP, &act, NULL); // XXX
 
-  while (!hup_catched) {
+  while (!is_exiting) {
     ret = cuse_wait_and_process();
     if (ret < 0)
       break;
@@ -513,6 +512,8 @@ int main(int argc, char **argv) {
     errx(1, "kevent failed");
 
   kevent(kq, NULL, 0, evs, 1, NULL);
+
+  is_exiting = 1;
 
   for (unsigned i = 0; i < nitems(worker); ++i) {
     pthread_kill(worker[i], SIGHUP);
