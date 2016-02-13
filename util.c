@@ -16,7 +16,7 @@
 void
 set_bit(uint64_t *array, int bit)
 {
-	array[bit / 64] |= (1LL << (bit % 64));
+	array[bit / 64] |= ((uint64_t)1 << (bit % 64));
 }
 
 void
