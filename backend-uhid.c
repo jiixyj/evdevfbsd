@@ -29,6 +29,9 @@ struct uhid_backend {
   uint16_t hiditem_types[1024];
   int32_t *hiditem_array[1024];
   size_t hiditems_used;
+
+  char const *application_usage;
+  char const *physical_usage;
 };
 
 static const struct {
@@ -207,92 +210,8 @@ static void *uhid_fill_function(struct event_device *ed) {
   return NULL;
 }
 
-int uhid_backend_init(struct event_device *ed, char const *path) {
-  ed->priv_ptr = malloc(sizeof(struct uhid_backend));
-  if (!ed->priv_ptr)
-    return -1;
-
-  struct uhid_backend *b = ed->priv_ptr;
-
-  b->fd = open(path, O_RDONLY);
-  if (b->fd == -1)
-    goto fail;
-
-  hid_init(NULL);
-
-  b->report_desc = hid_get_report_desc(b->fd);
-  if (b->report_desc == 0)
-    goto fail;
-
-  bool use_rid = !!hid_get_report_id(b->fd);
-
-  int dlen = hid_report_size(b->report_desc, hid_input, -1);
-  if (dlen <= 0) {
-    goto fail;
-  }
-
-  uint8_t dbuf[1024] = {0};
-
-  // TODO: remove goto logic
-reread:;
-  struct pollfd pfd = {b->fd, POLLIN, 0};
-  int ret;
-  do {
-    ret = poll(&pfd, 1, 500);
-  } while (ret == -1 && errno == EINTR);
-  if (ret <= 0 || !(pfd.revents & POLLIN)) {
-    printf("skip initial HID packet...\n");
-    goto skip_reading;
-  }
-
-  if (use_rid) {
-    if (read(b->fd, dbuf, 1) != 1) {
-      goto fail;
-    }
-    dlen = hid_report_size(b->report_desc, hid_input, dbuf[0]);
-    if (dlen <= 1) {
-      goto fail;
-    }
-    --dlen;
-  }
-
-  if ((unsigned)dlen > sizeof(dbuf) - 1) {
-    abort();
-  }
-  if (read(b->fd, use_rid ? &dbuf[1] : dbuf, (unsigned)dlen) != dlen) {
-    goto fail;
-  }
-  if (use_rid && dbuf[0] != 1) {
-    goto reread;
-  }
-
-skip_reading:
-  b->hiditems_used = 0;
-  memset(b->hiditem_types, '\0', sizeof(b->hiditem_types));
-
-  struct hid_data *d;
-  struct hid_item h;
-
-  int collection_stack = 0;
-  char const* application_usage = NULL;
-  char const* physical_usage = NULL;
-
-  for (d = hid_start_parse(b->report_desc, 1 << hid_input, -1);
-       hid_get_item(d, &h);) {
-    switch (h.kind) {
-    case hid_collection:
-      if (h.collection == 1) {
-        application_usage = hid_usage_in_page(h.usage);
-      } else if (h.collection == 0) {
-        physical_usage = hid_usage_in_page(h.usage);
-      }
-
-      ++collection_stack;
-      break;
-    case hid_endcollection:
-      --collection_stack;
-      break;
-    case hid_input: {
+static int parse_input_descriptor(struct event_device *ed, uint8_t *dbuf, struct hid_item h) {
+      struct uhid_backend *b = ed->priv_ptr;
 
       int32_t data = hid_get_data(dbuf, &h);
       char const *usage_page = hid_usage_page(HID_PAGE(h.usage));
@@ -303,7 +222,7 @@ skip_reading:
         if (h.report_count == 1) {
           if (usage < 256) {
             if (!hid_to_evdev[usage]) {
-              break;
+              return 0;
             }
             b->hiditems[b->hiditems_used] = h;
             int slot = b->hiditem_slots[b->hiditems_used] =
@@ -318,14 +237,14 @@ skip_reading:
           }
         } else if (h.report_count > 1 && usage == 0) {
           if (h.logical_minimum > h.logical_maximum) {
-            break;
+            return 0;
           }
           b->hiditems[b->hiditems_used] = h;
           b->hiditem_slots[b->hiditems_used] = 0;
           b->hiditem_array[b->hiditems_used] =
               calloc((uint32_t)h.report_count * sizeof(int), 1);
           if (!b->hiditem_array[b->hiditems_used]) {
-            goto fail;
+            return -1;
           }
           ++b->hiditems_used;
           for (int i = h.logical_minimum; i <= h.logical_maximum; ++i) {
@@ -337,21 +256,21 @@ skip_reading:
           }
         }
       } else if (!strcmp(usage_page, "Button")) {
-        if (application_usage == NULL) {
-          goto fail;
+        if (b->application_usage == NULL) {
+          return -1;
         }
 
         b->hiditems[b->hiditems_used] = h;
         int slot;
 
-        if (!strcmp(application_usage, "Mouse")) {
+        if (!strcmp(b->application_usage, "Mouse")) {
           slot = b->hiditem_slots[b->hiditems_used] =
               (uint16_t)(BTN_MOUSE + (int)usage - 1);
-        } else if (!strcmp(application_usage, "Joystick")) {
+        } else if (!strcmp(b->application_usage, "Joystick")) {
           slot = b->hiditem_slots[b->hiditems_used] =
               (uint16_t)(BTN_JOYSTICK + (int)usage - 1);
         } else {
-          goto fail;
+          return -1;
         }
 
         ++b->hiditems_used;
@@ -436,6 +355,100 @@ skip_reading:
           ++b->hiditems_used;
         }
       }
+
+      return 0;
+}
+
+int uhid_backend_init(struct event_device *ed, char const *path) {
+  ed->priv_ptr = malloc(sizeof(struct uhid_backend));
+  if (!ed->priv_ptr)
+    return -1;
+
+  struct uhid_backend *b = ed->priv_ptr;
+
+  b->fd = open(path, O_RDONLY);
+  if (b->fd == -1)
+    goto fail;
+
+  hid_init(NULL);
+
+  b->report_desc = hid_get_report_desc(b->fd);
+  if (b->report_desc == 0)
+    goto fail;
+
+  bool use_rid = !!hid_get_report_id(b->fd);
+
+  int dlen = hid_report_size(b->report_desc, hid_input, -1);
+  if (dlen <= 0) {
+    goto fail;
+  }
+
+  uint8_t dbuf[1024] = {0};
+
+  // TODO: remove goto logic
+reread:;
+  struct pollfd pfd = {b->fd, POLLIN, 0};
+  int ret;
+  do {
+    ret = poll(&pfd, 1, 500);
+  } while (ret == -1 && errno == EINTR);
+  if (ret <= 0 || !(pfd.revents & POLLIN)) {
+    printf("skip initial HID packet...\n");
+    goto skip_reading;
+  }
+
+  if (use_rid) {
+    if (read(b->fd, dbuf, 1) != 1) {
+      goto fail;
+    }
+    dlen = hid_report_size(b->report_desc, hid_input, dbuf[0]);
+    if (dlen <= 1) {
+      goto fail;
+    }
+    --dlen;
+  }
+
+  if ((unsigned)dlen > sizeof(dbuf) - 1) {
+    abort();
+  }
+  if (read(b->fd, use_rid ? &dbuf[1] : dbuf, (unsigned)dlen) != dlen) {
+    goto fail;
+  }
+  if (use_rid && dbuf[0] != 1) {
+    goto reread;
+  }
+
+skip_reading:
+  b->hiditems_used = 0;
+  memset(b->hiditem_types, '\0', sizeof(b->hiditem_types));
+
+  struct hid_data *d;
+  struct hid_item h;
+
+  int collection_stack = 0;
+  b->application_usage = NULL;
+  b->physical_usage = NULL;
+
+  for (d = hid_start_parse(b->report_desc, 1 << hid_input, -1);
+       hid_get_item(d, &h);) {
+    switch (h.kind) {
+    case hid_collection:
+      if (h.collection == 1) {
+        b->application_usage = hid_usage_in_page(h.usage);
+      } else if (h.collection == 0) {
+        b->physical_usage = hid_usage_in_page(h.usage);
+      }
+
+      ++collection_stack;
+      break;
+    case hid_endcollection:
+      --collection_stack;
+      break;
+    case hid_input: {
+      ret = parse_input_descriptor(ed, dbuf, h);
+      if (ret == -1) {
+        goto fail;
+      }
       break;
     }
     case hid_output:
@@ -448,6 +461,9 @@ skip_reading:
     }
   }
   hid_end_parse(d);
+
+  b->application_usage = NULL;
+  b->physical_usage = NULL;
 
   memset(b->desc, '\0', sizeof(b->desc));
   size_t siz = sizeof(b->desc) - 1;
