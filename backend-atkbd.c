@@ -127,55 +127,6 @@ reattach_atkbd_part2()
 	system("kbdcontrol -k /dev/kbdmux0 < /dev/console");
 }
 
-int
-atkbd_backend_init(struct event_device *ed)
-{
-	ed->priv_ptr = malloc(sizeof(struct atkbd_backend));
-	if (!ed->priv_ptr)
-		return 1;
-
-	struct atkbd_backend *b = ed->priv_ptr;
-
-	ed->iid.bustype = BUS_I8042;
-	ed->iid.vendor = 0x01;
-	ed->iid.product = 0x01;
-	ed->device_name = "AT Translated Set 2 keyboard";
-
-	memset(&b->atkbd, 0, sizeof(b->atkbd));
-
-	b->vkbd_fd = open("/dev/vkbdctl0", O_RDWR);
-	if (b->vkbd_fd == -1)
-		goto fail;
-
-	detach_atkbd();
-
-	b->atkbd_fd = open("/dev/atkbd0", O_RDWR);
-	if (b->atkbd_fd == -1 || ioctl(b->atkbd_fd, KDSKBMODE, K_RAW) == -1) {
-		reattach_atkbd_part1();
-
-		if (b->atkbd_fd != -1)
-			close(b->atkbd_fd);
-		close(b->vkbd_fd);
-
-		reattach_atkbd_part2();
-
-		goto fail;
-	}
-
-	set_bit(ed->event_bits, EV_KEY);
-	for (unsigned i = 0; i < nitems(scan_to_evdev); ++i) {
-		if (scan_to_evdev[i] != 0 && scan_to_evdev[i] != 255)
-			set_bit(ed->key_bits, scan_to_evdev[i]);
-	}
-	set_bit(ed->event_bits, EV_MSC);
-	set_bit(ed->msc_bits, MSC_SCAN);
-
-	return 0;
-fail:
-	free(ed->priv_ptr);
-	return 1;
-}
-
 static bool
 write_keycode(int fd, unsigned int kc)
 {
@@ -187,7 +138,7 @@ write_keycode(int fd, unsigned int kc)
 	return true;
 }
 
-void *
+static void *
 atkbd_fill_function(struct event_device *ed)
 {
 	struct atkbd_backend *b = ed->priv_ptr;
@@ -297,4 +248,56 @@ atkbd_backend_cleanup(struct event_device *ed)
 	pthread_join(ed->fill_thread, NULL);
 
 	reattach_atkbd_part2();
+}
+
+int
+atkbd_backend_init(struct event_device *ed)
+{
+	ed->priv_ptr = malloc(sizeof(struct atkbd_backend));
+	if (!ed->priv_ptr)
+		return -1;
+
+	struct atkbd_backend *b = ed->priv_ptr;
+
+	ed->iid.bustype = BUS_I8042;
+	ed->iid.vendor = 0x01;
+	ed->iid.product = 0x01;
+	ed->device_name = "AT Translated Set 2 keyboard";
+
+	memset(&b->atkbd, 0, sizeof(b->atkbd));
+
+	b->vkbd_fd = open("/dev/vkbdctl0", O_RDWR);
+	if (b->vkbd_fd == -1)
+		goto fail;
+
+	detach_atkbd();
+
+	b->atkbd_fd = open("/dev/atkbd0", O_RDWR);
+	if (b->atkbd_fd == -1 || ioctl(b->atkbd_fd, KDSKBMODE, K_RAW) == -1) {
+		reattach_atkbd_part1();
+
+		if (b->atkbd_fd != -1)
+			close(b->atkbd_fd);
+		close(b->vkbd_fd);
+
+		reattach_atkbd_part2();
+
+		goto fail;
+	}
+
+	set_bit(ed->event_bits, EV_KEY);
+	for (unsigned i = 0; i < nitems(scan_to_evdev); ++i) {
+		if (scan_to_evdev[i] != 0 && scan_to_evdev[i] != 255)
+			set_bit(ed->key_bits, scan_to_evdev[i]);
+	}
+	set_bit(ed->event_bits, EV_MSC);
+	set_bit(ed->msc_bits, MSC_SCAN);
+
+	ed->fill_function = atkbd_fill_function;
+	ed->backend_type = ATKBD_BACKEND;
+
+	return 1;
+fail:
+	free(ed->priv_ptr);
+	return -1;
 }

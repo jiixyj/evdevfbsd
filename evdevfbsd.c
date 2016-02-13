@@ -404,38 +404,18 @@ event_device_open(struct event_device *eds, size_t neds, char const *path)
 		return -1;
 	}
 
-	int nr_eds = 0, inited_eds;
-
 	if (!strcmp(path, "/dev/bpsm0") || !strcmp(path, "/dev/psm0")) {
-		inited_eds = psm_backend_init(eds);
-		if (inited_eds == -1) {
-			return -1;
-		}
-		nr_eds += inited_eds;
+		return psm_backend_init(eds);
 	} else if (!strcmp(path, "/dev/sysmouse") ||
 	    !strcmp(path, "/dev/ums0")) {
-		if (sysmouse_backend_init(eds, path))
-			return -1;
-		eds->fill_function = sysmouse_fill_function;
-		eds->backend_type = SYSMOUSE_BACKEND;
-		++nr_eds;
+		return sysmouse_backend_init(eds, path);
 	} else if (!strcmp(path, "/dev/atkbd0")) {
-		if (atkbd_backend_init(eds))
-			return -1;
-		eds->fill_function = atkbd_fill_function;
-		eds->backend_type = ATKBD_BACKEND;
-		++nr_eds;
+		return atkbd_backend_init(eds);
 	} else if (!strncmp(path, "/dev/uhid", 9)) {
-		if (uhid_backend_init(eds, path))
-			return -1;
-		eds->fill_function = uhid_fill_function;
-		eds->backend_type = UHID_BACKEND;
-		++nr_eds;
+		return uhid_backend_init(eds, path);
 	} else {
 		return -1;
 	}
-
-	return nr_eds;
 }
 
 static void

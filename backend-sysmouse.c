@@ -26,58 +26,7 @@ sysmouse_backend_get_path(struct event_device *ed)
 	return b->path;
 }
 
-int
-sysmouse_backend_init(struct event_device *ed, char const *path)
-{
-	ed->priv_ptr = malloc(sizeof(struct sysmouse_backend));
-	if (!ed->priv_ptr)
-		return 1;
-
-	struct sysmouse_backend *b = ed->priv_ptr;
-
-	if (snprintf(b->path, sizeof(b->path), "%s", path) == -1)
-		return 1;
-
-	b->fd = open(b->path, O_RDONLY);
-	if (b->fd == -1)
-		goto fail;
-
-	b->level = 2;
-	if (ioctl(b->fd, MOUSE_SETLEVEL, &b->level) == -1) {
-		b->level = 1;
-		if (ioctl(b->fd, MOUSE_SETLEVEL, &b->level) == -1) {
-			goto fail;
-		}
-	}
-
-	if (ioctl(b->fd, MOUSE_GETMODE, &b->mode) == -1)
-		goto fail;
-
-	if (b->mode.protocol != MOUSE_PROTO_SYSMOUSE)
-		goto fail;
-
-	if (b->mode.packetsize < 0 || b->mode.packetsize > PSM_PACKET_MAX_SIZE)
-		goto fail;
-
-	if (ioctl(b->fd, MOUSE_GETHWINFO, &b->hw_info) == -1)
-		goto fail;
-
-	printf("nr buttons: %d\n", b->hw_info.buttons);
-
-	set_bits_generic_ps2(ed);
-	for (int i = 3; i < b->hw_info.buttons; ++i) {
-		set_bit(ed->key_bits, BTN_MOUSE + i);
-	}
-	set_bit(ed->rel_bits, REL_WHEEL);
-	set_bit(ed->rel_bits, REL_HWHEEL);
-
-	return 0;
-fail:
-	free(ed->priv_ptr);
-	return 1;
-}
-
-void *
+static void *
 sysmouse_fill_function(struct event_device *ed)
 {
 	struct sysmouse_backend *b = ed->priv_ptr;
@@ -152,4 +101,58 @@ sysmouse_fill_function(struct event_device *ed)
 	}
 
 	return NULL;
+}
+
+int
+sysmouse_backend_init(struct event_device *ed, char const *path)
+{
+	ed->priv_ptr = malloc(sizeof(struct sysmouse_backend));
+	if (!ed->priv_ptr)
+		return -1;
+
+	struct sysmouse_backend *b = ed->priv_ptr;
+
+	if (snprintf(b->path, sizeof(b->path), "%s", path) == -1)
+		return -1;
+
+	b->fd = open(b->path, O_RDONLY);
+	if (b->fd == -1)
+		goto fail;
+
+	b->level = 2;
+	if (ioctl(b->fd, MOUSE_SETLEVEL, &b->level) == -1) {
+		b->level = 1;
+		if (ioctl(b->fd, MOUSE_SETLEVEL, &b->level) == -1) {
+			goto fail;
+		}
+	}
+
+	if (ioctl(b->fd, MOUSE_GETMODE, &b->mode) == -1)
+		goto fail;
+
+	if (b->mode.protocol != MOUSE_PROTO_SYSMOUSE)
+		goto fail;
+
+	if (b->mode.packetsize < 0 || b->mode.packetsize > PSM_PACKET_MAX_SIZE)
+		goto fail;
+
+	if (ioctl(b->fd, MOUSE_GETHWINFO, &b->hw_info) == -1)
+		goto fail;
+
+	printf("nr buttons: %d\n", b->hw_info.buttons);
+
+	set_bits_generic_ps2(ed);
+	for (int i = 3; i < b->hw_info.buttons; ++i) {
+		set_bit(ed->key_bits, BTN_MOUSE + i);
+	}
+	set_bit(ed->rel_bits, REL_WHEEL);
+	set_bit(ed->rel_bits, REL_HWHEEL);
+
+	ed->fill_function = sysmouse_fill_function;
+	ed->backend_type = SYSMOUSE_BACKEND;
+
+	return 1;
+fail:
+	free(ed->priv_ptr);
+	return -1;
 }

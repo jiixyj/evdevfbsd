@@ -4,7 +4,6 @@
 #include "evdevfbsd.h"
 
 int atkbd_backend_init(struct event_device *ed);
-void *atkbd_fill_function(struct event_device *ed);
 void atkbd_backend_cleanup(struct event_device *ed);
 
 #endif

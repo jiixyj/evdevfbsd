@@ -58,10 +58,156 @@ static const unsigned char hid_to_evdev[256] = {
 
 #undef KU
 
+static void *uhid_fill_function(struct event_device *ed) {
+  struct uhid_backend *b = ed->priv_ptr;
+
+  bool use_rid = !!hid_get_report_id(b->fd);
+
+  int dlen = hid_report_size(b->report_desc, hid_input, -1);
+  if (dlen <= 0) {
+    return NULL;
+  }
+
+  for (;;) {
+    uint8_t dbuf[1024] = {0};
+
+    if (use_rid) {
+      if (read(b->fd, dbuf, 1) != 1) {
+        break;
+      }
+      dlen = hid_report_size(b->report_desc, hid_input, dbuf[0]);
+      if (dlen <= 1) {
+        break;
+      }
+      --dlen;
+    }
+
+    if ((unsigned)dlen > sizeof(dbuf) - 1) {
+      abort();
+    }
+    if (read(b->fd, use_rid ? &dbuf[1] : dbuf, (unsigned)dlen) != dlen) {
+      break;
+    }
+#if 0
+    if (use_rid) {
+      ++dlen;
+    }
+    for (size_t i = 0; i < (unsigned)dlen; ++i) {
+      printf("%02x ", dbuf[i]);
+    }
+    printf("\n");
+#endif
+
+    struct timeval tv;
+    get_clock_value(ed, &tv);
+
+    if (use_rid && dbuf[0] != 1) {
+      continue;
+    }
+
+    pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
+
+    event_client_need_free_bufsize(ed, 32);
+
+    for (size_t i = 0; i < b->hiditems_used; ++i) {
+      hid_item_t h = b->hiditems[i];
+      uint16_t slot = b->hiditem_slots[i];
+      uint16_t type = b->hiditem_types[i];
+
+      int32_t data = hid_get_data(dbuf, &h);
+      char const *usage_page = hid_usage_page(HID_PAGE(h.usage));
+      char const *usage_in_page = hid_usage_in_page(h.usage);
+
+      if (!strcmp(usage_page, "Keyboard")) {
+        if (h.report_count == 1) {
+          put_event(ed, &tv, EV_KEY, slot, data);
+        } else if (h.report_count > 1) {
+          int32_t new_keys[128] = {0};
+          if (h.report_count > 128) {
+            abort();
+          }
+          int32_t *old_keys = b->hiditem_array[i];
+          uint32_t old_pos = h.pos;
+          for (int r = 0; r < h.report_count; ++r) {
+            data = hid_get_data(dbuf, &h);
+
+            if (data >= 0 && data <= 255) {
+              new_keys[r] = data;
+              bool is_in_old_data = false;
+              for (int p = 0; p < h.report_count; ++p) {
+                if (data == old_keys[p]) {
+                  is_in_old_data = true;
+                  break;
+                }
+              }
+
+              if (!is_in_old_data && hid_to_evdev[data]) {
+                put_event(ed, &tv, EV_KEY, hid_to_evdev[data], 1);
+              }
+            }
+
+            if (h.report_size < 0) {
+              abort();
+            }
+            h.pos += (uint32_t)h.report_size;
+          }
+          h.pos = old_pos;
+
+          for (int r = 0; r < h.report_count; ++r) {
+            bool is_in_new_data = false;
+            for (int p = 0; p < h.report_count; ++p) {
+              if (old_keys[r] == new_keys[p]) {
+                is_in_new_data = true;
+                break;
+              }
+            }
+            if (!is_in_new_data && hid_to_evdev[old_keys[r]]) {
+              put_event(ed, &tv, EV_KEY, hid_to_evdev[old_keys[r]], 0);
+            }
+          }
+          for (int r = 0; r < h.report_count; ++r) {
+            old_keys[r] = new_keys[r];
+          }
+        }
+      } else if (!strcmp(usage_page, "Button")) {
+        put_event(ed, &tv, EV_KEY, slot, data);
+      } else if (!strcmp(usage_page, "Generic_Desktop")) {
+        if (!strcmp(usage_in_page, "X") || !strcmp(usage_in_page, "Y") ||
+            !strcmp(usage_in_page, "Z") || !strcmp(usage_in_page, "Rz")) {
+          put_event(ed, &tv, type, slot, data);
+        } else if (!strcmp(usage_in_page, "Hat_Switch")) {
+          int hat_dir = (data - h.logical_minimum) * 8 /
+                            (h.logical_maximum - h.logical_minimum + 1) +
+                        1;
+          if (hat_dir < 0 || hat_dir > 8) {
+            hat_dir = 0;
+          }
+          put_event(ed, &tv, EV_ABS, slot, hat_to_axis[hat_dir].x);
+          put_event(ed, &tv, EV_ABS, slot + 1, hat_to_axis[hat_dir].y);
+        } else if (!strcmp(usage_in_page, "Slider") ||
+                   !strcmp(usage_in_page, "Wheel")) {
+          put_event(ed, &tv, type, slot, data);
+        }
+      } else if (!strcmp(usage_page, "Consumer")) {
+        if (!strcmp(usage_in_page, "AC_Pan")) {
+          put_event(ed, &tv, type, slot, data);
+        }
+      }
+    }
+
+    put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
+    cuse_poll_wakeup();
+
+    pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
+  }
+
+  return NULL;
+}
+
 int uhid_backend_init(struct event_device *ed, char const *path) {
   ed->priv_ptr = malloc(sizeof(struct uhid_backend));
   if (!ed->priv_ptr)
-    return 1;
+    return -1;
 
   struct uhid_backend *b = ed->priv_ptr;
 
@@ -310,154 +456,11 @@ skip_reading:
   }
   ed->device_name = b->desc;
 
-  return 0;
+  ed->fill_function = uhid_fill_function;
+  ed->backend_type = UHID_BACKEND;
+
+  return 1;
 fail:
   free(ed->priv_ptr);
-  return 1;
-}
-
-void *uhid_fill_function(struct event_device *ed) {
-  struct uhid_backend *b = ed->priv_ptr;
-
-  bool use_rid = !!hid_get_report_id(b->fd);
-
-  int dlen = hid_report_size(b->report_desc, hid_input, -1);
-  if (dlen <= 0) {
-    return NULL;
-  }
-
-  for (;;) {
-    uint8_t dbuf[1024] = {0};
-
-    if (use_rid) {
-      if (read(b->fd, dbuf, 1) != 1) {
-        break;
-      }
-      dlen = hid_report_size(b->report_desc, hid_input, dbuf[0]);
-      if (dlen <= 1) {
-        break;
-      }
-      --dlen;
-    }
-
-    if ((unsigned)dlen > sizeof(dbuf) - 1) {
-      abort();
-    }
-    if (read(b->fd, use_rid ? &dbuf[1] : dbuf, (unsigned)dlen) != dlen) {
-      break;
-    }
-#if 0
-    if (use_rid) {
-      ++dlen;
-    }
-    for (size_t i = 0; i < (unsigned)dlen; ++i) {
-      printf("%02x ", dbuf[i]);
-    }
-    printf("\n");
-#endif
-
-    struct timeval tv;
-    get_clock_value(ed, &tv);
-
-    if (use_rid && dbuf[0] != 1) {
-      continue;
-    }
-
-    pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
-
-    event_client_need_free_bufsize(ed, 32);
-
-    for (size_t i = 0; i < b->hiditems_used; ++i) {
-      hid_item_t h = b->hiditems[i];
-      uint16_t slot = b->hiditem_slots[i];
-      uint16_t type = b->hiditem_types[i];
-
-      int32_t data = hid_get_data(dbuf, &h);
-      char const *usage_page = hid_usage_page(HID_PAGE(h.usage));
-      char const *usage_in_page = hid_usage_in_page(h.usage);
-
-      if (!strcmp(usage_page, "Keyboard")) {
-        if (h.report_count == 1) {
-          put_event(ed, &tv, EV_KEY, slot, data);
-        } else if (h.report_count > 1) {
-          int32_t new_keys[128] = {0};
-          if (h.report_count > 128) {
-            abort();
-          }
-          int32_t *old_keys = b->hiditem_array[i];
-          uint32_t old_pos = h.pos;
-          for (int r = 0; r < h.report_count; ++r) {
-            data = hid_get_data(dbuf, &h);
-
-            if (data >= 0 && data <= 255) {
-              new_keys[r] = data;
-              bool is_in_old_data = false;
-              for (int p = 0; p < h.report_count; ++p) {
-                if (data == old_keys[p]) {
-                  is_in_old_data = true;
-                  break;
-                }
-              }
-
-              if (!is_in_old_data && hid_to_evdev[data]) {
-                put_event(ed, &tv, EV_KEY, hid_to_evdev[data], 1);
-              }
-            }
-
-            if (h.report_size < 0) {
-              abort();
-            }
-            h.pos += (uint32_t)h.report_size;
-          }
-          h.pos = old_pos;
-
-          for (int r = 0; r < h.report_count; ++r) {
-            bool is_in_new_data = false;
-            for (int p = 0; p < h.report_count; ++p) {
-              if (old_keys[r] == new_keys[p]) {
-                is_in_new_data = true;
-                break;
-              }
-            }
-            if (!is_in_new_data && hid_to_evdev[old_keys[r]]) {
-              put_event(ed, &tv, EV_KEY, hid_to_evdev[old_keys[r]], 0);
-            }
-          }
-          for (int r = 0; r < h.report_count; ++r) {
-            old_keys[r] = new_keys[r];
-          }
-        }
-      } else if (!strcmp(usage_page, "Button")) {
-        put_event(ed, &tv, EV_KEY, slot, data);
-      } else if (!strcmp(usage_page, "Generic_Desktop")) {
-        if (!strcmp(usage_in_page, "X") || !strcmp(usage_in_page, "Y") ||
-            !strcmp(usage_in_page, "Z") || !strcmp(usage_in_page, "Rz")) {
-          put_event(ed, &tv, type, slot, data);
-        } else if (!strcmp(usage_in_page, "Hat_Switch")) {
-          int hat_dir = (data - h.logical_minimum) * 8 /
-                            (h.logical_maximum - h.logical_minimum + 1) +
-                        1;
-          if (hat_dir < 0 || hat_dir > 8) {
-            hat_dir = 0;
-          }
-          put_event(ed, &tv, EV_ABS, slot, hat_to_axis[hat_dir].x);
-          put_event(ed, &tv, EV_ABS, slot + 1, hat_to_axis[hat_dir].y);
-        } else if (!strcmp(usage_in_page, "Slider") ||
-                   !strcmp(usage_in_page, "Wheel")) {
-          put_event(ed, &tv, type, slot, data);
-        }
-      } else if (!strcmp(usage_page, "Consumer")) {
-        if (!strcmp(usage_in_page, "AC_Pan")) {
-          put_event(ed, &tv, type, slot, data);
-        }
-      }
-    }
-
-    put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
-    cuse_poll_wakeup();
-
-    pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
-  }
-
-  return NULL;
+  return -1;
 }
