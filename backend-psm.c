@@ -60,8 +60,7 @@ synaptics_setup_abs_axes(
 	    b->synaptics_info.minimumYCoord) {
 		ed->abs_info[x_axis].minimum = b->synaptics_info.minimumXCoord;
 		ed->abs_info[y_axis].minimum = b->synaptics_info.minimumYCoord;
-	}
-	else {
+	} else {
 		ed->abs_info[x_axis].minimum = X_MIN_DEFAULT;
 		ed->abs_info[y_axis].minimum = Y_MIN_DEFAULT;
 	}
@@ -69,16 +68,14 @@ synaptics_setup_abs_axes(
 	    b->synaptics_info.maximumYCoord) {
 		ed->abs_info[x_axis].maximum = b->synaptics_info.maximumXCoord;
 		ed->abs_info[y_axis].maximum = b->synaptics_info.maximumYCoord;
-	}
-	else {
+	} else {
 		ed->abs_info[x_axis].maximum = X_MAX_DEFAULT;
 		ed->abs_info[y_axis].maximum = Y_MAX_DEFAULT;
 	}
 	if (b->synaptics_info.infoXupmm && b->synaptics_info.infoYupmm) {
 		ed->abs_info[x_axis].resolution = b->synaptics_info.infoXupmm;
 		ed->abs_info[y_axis].resolution = b->synaptics_info.infoYupmm;
-	}
-	else {
+	} else {
 		switch (b->synaptics_info.infoSensor) {
 		case 1:
 			ed->abs_info[x_axis].resolution = 85;
@@ -210,8 +207,7 @@ synaptic_parse_packet(struct event_device *ed, struct timeval *tv,
 			return -1;
 		}
 		return 1;
-	}
-	else if (w == 2) {
+	} else if (w == 2) {
 		synaptic_parse_ew_packet(ed, packet);
 		return 1;
 	}
@@ -226,8 +222,7 @@ synaptic_parse_packet(struct event_device *ed, struct timeval *tv,
 			*buttons |= (1 << 5);
 		if ((packet[3] ^ packet[0]) & 0x02)
 			*buttons |= (1 << 6);
-	}
-	else if (b->synaptics_info.capMiddle) {
+	} else if (b->synaptics_info.capMiddle) {
 		if ((packet[0] ^ packet[3]) & 0x01)
 			*buttons |= (1 << 2);
 	}
@@ -245,8 +240,7 @@ synaptic_parse_packet(struct event_device *ed, struct timeval *tv,
 		if (w <= 1 && (b->synaptics_info.capMultiFinger ||
 				  b->synaptics_info.capAdvancedGestures)) {
 			no_fingers = w + 2;
-		}
-		else if (w >= 4 && w <= 15 &&
+		} else if (w >= 4 && w <= 15 &&
 		    b->synaptics_info.capPalmDetect) {
 			finger_width = w;
 		}
@@ -273,15 +267,13 @@ synaptic_parse_packet(struct event_device *ed, struct timeval *tv,
 			    MAX(x, b->ews.x));
 			put_event(ed, tv, EV_ABS, ABS_MT_POSITION_Y,
 			    synaptics_inverse_y(MAX(y, b->ews.y)));
-		}
-		else if (no_fingers == 1) {
+		} else if (no_fingers == 1) {
 			enable_mt_slot(ed, tv, 0);
 			put_event(ed, tv, EV_ABS, ABS_MT_POSITION_X, x);
 			put_event(ed, tv, EV_ABS, ABS_MT_POSITION_Y,
 			    synaptics_inverse_y(y));
 			disable_mt_slot(ed, tv, 1);
-		}
-		else {
+		} else {
 			disable_mt_slot(ed, tv, 0);
 			disable_mt_slot(ed, tv, 1);
 		}
@@ -347,8 +339,7 @@ psm_fill_function(struct event_device *ed)
 				pthread_mutex_unlock(
 				    &ed->event_buffer_mutex); // XXX
 				return NULL;
-			}
-			else if (ret == 0) {
+			} else if (ret == 0) {
 				cuse_poll_wakeup();
 				obuttons = buttons;
 			}
@@ -389,8 +380,7 @@ psm_fill_function(struct event_device *ed)
 }
 
 static int
-psm_open_as_guest(
-    struct event_device *ed, struct event_device *parent)
+psm_open_as_guest(struct event_device *ed, struct event_device *parent)
 {
 	{
 		struct psm_backend *pb = parent->priv_ptr;

@@ -52,16 +52,14 @@ put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
 			return;
 		else
 			ed->key_state[code] = value;
-	}
-	else if (type == EV_ABS && code < ABS_MT_SLOT) {
+	} else if (type == EV_ABS && code < ABS_MT_SLOT) {
 		if (ed->abs_state[code] == value)
 			return;
 		else {
 			ed->abs_state[code] = value;
 			ed->abs_info[code].value = value;
 		}
-	}
-	else if (type == EV_ABS && code > ABS_MT_SLOT) {
+	} else if (type == EV_ABS && code > ABS_MT_SLOT) {
 		if (ed->current_mt_slot == -1) {
 			// error
 			return;
@@ -72,12 +70,10 @@ put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
 		else
 			ed->mt_state[ed->current_mt_slot][code -
 			    ABS_MT_FIRST] = value;
-	}
-	else if (type == EV_SYN) {
+	} else if (type == EV_SYN) {
 		if (ed->events_since_last_syn == 0)
 			return;
-	}
-	else if (type == EV_REL) {
+	} else if (type == EV_REL) {
 		if (value == 0) {
 			return;
 		}
@@ -124,8 +120,7 @@ put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
 
 	if (type == EV_SYN) {
 		ed->events_since_last_syn = 0;
-	}
-	else {
+	} else {
 		ed->events_since_last_syn++;
 	}
 
@@ -160,8 +155,7 @@ put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
 			md.x = value;
 		if (code == REL_Y)
 			md.y = value;
-	}
-	else if (type == EV_KEY) {
+	} else if (type == EV_KEY) {
 		struct mouse_info mi = ZERO_INITIALIZER;
 		mi.operation = MOUSE_BUTTON_EVENT;
 
@@ -171,8 +165,7 @@ put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
 			if (value) {
 				if (compare_times(*tv, last_left)) {
 					left_times += 1;
-				}
-				else {
+				} else {
 					left_times = 1;
 				}
 				last_left = *tv;
@@ -192,8 +185,7 @@ put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
 			if (ioctl(cfd, CONS_MOUSECTL, &mi) == -1)
 				perror("ioctl");
 		}
-	}
-	else if (type == EV_SYN && (md.x || md.y)) {
+	} else if (type == EV_SYN && (md.x || md.y)) {
 		struct mouse_info mi = ZERO_INITIALIZER;
 		mi.operation = MOUSE_MOTION_EVENT;
 		mi.u.data = md;

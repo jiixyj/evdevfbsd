@@ -132,8 +132,7 @@ retry:
 			pthread_mutex_unlock(&ed->event_buffer_mutex);
 			goto retry;
 		}
-	}
-	else {
+	} else {
 		nr_events =
 		    MIN(requested_events, client_state->event_buffer_end);
 		ret = cuse_copy_out(client_state->event_buffer, user_ptr,
@@ -208,16 +207,13 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 		if (peer_data) {
 			if (ed->exclusive_client != NULL) {
 				return CUSE_ERR_BUSY;
-			}
-			else {
+			} else {
 				ed->exclusive_client = client_state;
 			}
-		}
-		else {
+		} else {
 			if (ed->exclusive_client != client_state) {
 				return CUSE_ERR_INVALID;
-			}
-			else {
+			} else {
 				ed->exclusive_client = NULL;
 			}
 		}
@@ -233,8 +229,7 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 		    new_clock == CLOCK_MONOTONIC) {
 			ed->clock = new_clock;
 			return 0;
-		}
-		else {
+		} else {
 			return CUSE_ERR_INVALID;
 		}
 	}
@@ -254,8 +249,7 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 		if (ed->device_name) {
 			return cuse_copy_out(ed->device_name, peer_data,
 			    (int)MIN(strlen(ed->device_name), len));
-		}
-		else {
+		} else {
 			return 0;
 		}
 	}
@@ -349,11 +343,9 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 	unsigned long direction = cmd & IOC_DIRMASK;
 	if (direction == IOC_VOID) {
 		puts("direction: void");
-	}
-	else if (direction == IOC_OUT) {
+	} else if (direction == IOC_OUT) {
 		puts("direction: out");
-	}
-	else if (direction == IOC_IN) {
+	} else if (direction == IOC_IN) {
 		puts("direction: in");
 	}
 	printf("length: %lu\n", IOCPARM_LEN(cmd));
@@ -420,30 +412,26 @@ event_device_open(struct event_device *eds, size_t neds, char const *path)
 			return -1;
 		}
 		nr_eds += inited_eds;
-	}
-	else if (!strcmp(path, "/dev/sysmouse") ||
+	} else if (!strcmp(path, "/dev/sysmouse") ||
 	    !strcmp(path, "/dev/ums0")) {
 		if (sysmouse_backend_init(eds, path))
 			return -1;
 		eds->fill_function = sysmouse_fill_function;
 		eds->backend_type = SYSMOUSE_BACKEND;
 		++nr_eds;
-	}
-	else if (!strcmp(path, "/dev/atkbd0")) {
+	} else if (!strcmp(path, "/dev/atkbd0")) {
 		if (atkbd_backend_init(eds))
 			return -1;
 		eds->fill_function = atkbd_fill_function;
 		eds->backend_type = ATKBD_BACKEND;
 		++nr_eds;
-	}
-	else if (!strncmp(path, "/dev/uhid", 9)) {
+	} else if (!strncmp(path, "/dev/uhid", 9)) {
 		if (uhid_backend_init(eds, path))
 			return -1;
 		eds->fill_function = uhid_fill_function;
 		eds->backend_type = UHID_BACKEND;
 		++nr_eds;
-	}
-	else {
+	} else {
 		return -1;
 	}
 

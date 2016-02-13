@@ -95,8 +95,7 @@ calculate_release_extraction_state(struct atkbd_state *atkbd, uint16_t code)
 		if (((code ^ ambivalent_keys[i]) & 0x7f) == 0) {
 			if (code & 0x80) {
 				atkbd->release_extraction_state[i] = false;
-			}
-			else {
+			} else {
 				// key has been pressed, need to extract
 				// release bit when released
 				atkbd->release_extraction_state[i] = true;
@@ -222,13 +221,11 @@ atkbd_fill_function(struct event_device *ed)
 		if (code == AT_ES0) {
 			b->atkbd.escape = 1;
 			goto next;
-		}
-		else if (code == AT_ES1) {
+		} else if (code == AT_ES1) {
 			b->atkbd.escape = 2;
 			goto next;
-		}
-		else if (code == AT_BAT || code == AT_REL || code == AT_ACK ||
-		    code == AT_NAK || code == AT_ERR) {
+		} else if (code == AT_BAT || code == AT_REL ||
+		    code == AT_ACK || code == AT_NAK || code == AT_ERR) {
 			fprintf(
 			    stderr, "unexpected control code: %d\n", +code);
 			goto next;
@@ -249,20 +246,16 @@ atkbd_fill_function(struct event_device *ed)
 
 		if (evdev_code == 255) {
 			goto next;
-		}
-		else if (evdev_code == 0) {
+		} else if (evdev_code == 0) {
 			fprintf(stderr, "unknown key encountered\n");
 			put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
-		}
-		else {
+		} else {
 			int evdev_value;
 			if (release) {
 				evdev_value = 0;
-			}
-			else if (ed->key_state[evdev_code]) {
+			} else if (ed->key_state[evdev_code]) {
 				evdev_value = 2;
-			}
-			else {
+			} else {
 				evdev_value = 1;
 			}
 
