@@ -407,7 +407,7 @@ event_device_open(struct event_device *eds, size_t neds, char const *path)
 	if (!strcmp(path, "/dev/bpsm0") || !strcmp(path, "/dev/psm0")) {
 		return psm_backend_init(eds);
 	} else if (!strcmp(path, "/dev/sysmouse") ||
-	    !strcmp(path, "/dev/ums0")) {
+	    !strncmp(path, "/dev/ums", 8)) {
 		return sysmouse_backend_init(eds, path);
 	} else if (!strcmp(path, "/dev/atkbd0")) {
 		return atkbd_backend_init(eds);
