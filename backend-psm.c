@@ -500,7 +500,7 @@ psm_fill_function(struct event_device *ed)
 }
 
 int
-event_device_open_as_guest(
+psm_open_as_guest(
     struct event_device *ed, struct event_device *parent)
 {
 	{

@@ -406,38 +406,52 @@ event_device_init(struct event_device *ed)
 }
 
 static int
-event_device_open(struct event_device *ed, char const *path)
+event_device_open(struct event_device *eds, size_t neds, char const *path)
 {
+	if (neds < 2) {
+		return -1;
+	}
+
+	int nr_eds = 0;
+
 	if (!strcmp(path, "/dev/bpsm0") || !strcmp(path, "/dev/psm0")) {
-		if (psm_backend_init(ed))
+		if (psm_backend_init(eds))
 			return -1;
-		ed->fill_function = psm_fill_function;
-		ed->backend_type = PSM_BACKEND;
+		eds->fill_function = psm_fill_function;
+		eds->backend_type = PSM_BACKEND;
+		++nr_eds;
+
+		if (psm_open_as_guest(&eds[1], &eds[0]) == 0) {
+			++nr_eds;
+		}
 	}
 	else if (!strcmp(path, "/dev/sysmouse") ||
 	    !strcmp(path, "/dev/ums0")) {
-		if (sysmouse_backend_init(ed, path))
+		if (sysmouse_backend_init(eds, path))
 			return -1;
-		ed->fill_function = sysmouse_fill_function;
-		ed->backend_type = SYSMOUSE_BACKEND;
+		eds->fill_function = sysmouse_fill_function;
+		eds->backend_type = SYSMOUSE_BACKEND;
+		++nr_eds;
 	}
 	else if (!strcmp(path, "/dev/atkbd0")) {
-		if (atkbd_backend_init(ed))
+		if (atkbd_backend_init(eds))
 			return -1;
-		ed->fill_function = atkbd_fill_function;
-		ed->backend_type = ATKBD_BACKEND;
+		eds->fill_function = atkbd_fill_function;
+		eds->backend_type = ATKBD_BACKEND;
+		++nr_eds;
 	}
 	else if (!strncmp(path, "/dev/uhid", 9)) {
-		if (uhid_backend_init(ed, path))
+		if (uhid_backend_init(eds, path))
 			return -1;
-		ed->fill_function = uhid_fill_function;
-		ed->backend_type = UHID_BACKEND;
+		eds->fill_function = uhid_fill_function;
+		eds->backend_type = UHID_BACKEND;
+		++nr_eds;
 	}
 	else {
-		return -EINVAL;
+		return -1;
 	}
 
-	return 0;
+	return nr_eds;
 }
 
 static void
@@ -517,16 +531,12 @@ main(int argc, char **argv)
 	}
 	size_t nr_eds = 0;
 
-	if (event_device_open(&eds[nr_eds], argv[0]))
-		errx(1, "could not open event device");
-
-	++nr_eds;
-
-	if (eds[0].backend_type == PSM_BACKEND) {
-		if (event_device_open_as_guest(&eds[nr_eds], &eds[0]) == 0) {
-			++nr_eds;
-		}
+	int new_eds = event_device_open(eds, nitems(eds), argv[0]);
+	if (new_eds == -1) {
+		errx(1, "could not open event device(s)");
 	}
+
+	nr_eds = (size_t)new_eds;
 
 	for (unsigned i = 0; i < nr_eds; ++i) {
 		if (create_cuse_device(&eds[i]))

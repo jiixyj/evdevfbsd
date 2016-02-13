@@ -8,7 +8,7 @@
 int psm_backend_init(struct event_device *ed);
 void *psm_fill_function(struct event_device *ed);
 
-int event_device_open_as_guest(
+int psm_open_as_guest(
     struct event_device *ed, struct event_device *parent);
 
 #endif
