@@ -131,8 +131,7 @@ put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
 
 	// prevent recursion of events
 	if (ed->backend_type == SYSMOUSE_BACKEND) {
-		struct sysmouse_backend *b = ed->priv_ptr;
-		if (!strcmp(b->path, "/dev/sysmouse"))
+		if (!strcmp(sysmouse_backend_get_path(ed), "/dev/sysmouse"))
 			return;
 	}
 

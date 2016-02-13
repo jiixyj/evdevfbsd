@@ -1,5 +1,7 @@
 #include "backend-sysmouse.h"
 
+#include <sys/mouse.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -8,6 +10,21 @@
 
 #include "backend-psm.h"
 #include "util.h"
+
+struct sysmouse_backend {
+	int fd;
+	int level;
+	mousemode_t mode;
+	mousehw_t hw_info;
+	char path[32];
+};
+
+char const *
+sysmouse_backend_get_path(struct event_device *ed)
+{
+	struct sysmouse_backend *b = ed->priv_ptr;
+	return b->path;
+}
 
 int
 sysmouse_backend_init(struct event_device *ed, char const *path)
