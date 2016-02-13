@@ -129,7 +129,8 @@ void put_event(struct event_device *ed, struct timeval *tv,
   if (cfd == 0) {
     cfd = open("/dev/consolectl", O_RDWR, 0);
     if (cfd != -1) {
-      system("for tty in /dev/ttyv*; do vidcontrol < $tty -m on; done");
+      system("for tty in /dev/ttyv*;"
+             "do vidcontrol < $tty -m on; done");
     }
   }
   if (cfd == -1) {
