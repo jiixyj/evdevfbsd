@@ -1,6 +1,7 @@
 #include "evdevfbsd.h"
 
 #include <sys/event.h>
+#include <sys/param.h>
 
 #include <errno.h>
 #include <signal.h>
@@ -517,13 +518,9 @@ main(int argc, char **argv)
 	bool has_guest_device = false;
 	struct event_device ed_guest;
 	if (ed.backend_type == PSM_BACKEND) {
-		struct psm_backend *b = ed.priv_ptr;
-		if (b->hw_info.model == MOUSE_MODEL_SYNAPTICS &&
-		    b->synaptics_info.capPassthrough) {
-			event_device_init(&ed_guest); // XXX
-			if (event_device_open_as_guest(&ed_guest, &ed) == 0)
-				has_guest_device = true;
-		}
+		event_device_init(&ed_guest); // XXX
+		if (event_device_open_as_guest(&ed_guest, &ed) == 0)
+			has_guest_device = true;
 	}
 
 	if (create_cuse_device(&ed))

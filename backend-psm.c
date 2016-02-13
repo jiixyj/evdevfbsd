@@ -1,5 +1,6 @@
 #include "backend-psm.h"
 
+#include <sys/mouse.h>
 #include <sys/param.h>
 
 #include <errno.h>
@@ -12,6 +13,31 @@
 
 #include "linux/mouse/psmouse.h"
 #include "util.h"
+
+#include <stdint.h>
+
+struct synaptics_ew_state {
+	int32_t x;
+	int32_t y;
+	int32_t z;
+};
+
+struct synaptics_slot_state {
+	int32_t x;
+	int32_t y;
+	int32_t tracking_id;
+};
+
+struct psm_backend {
+	int fd;
+	mousehw_t hw_info;
+	int guest_dev_fd;
+
+	// synaptics stuff
+	synapticshw_t synaptics_info;
+	struct synaptics_ew_state ews;
+	struct synaptics_slot_state ss[2];
+};
 
 #define X_MIN_DEFAULT 1472
 #define X_MAX_DEFAULT 5472
@@ -477,6 +503,14 @@ int
 event_device_open_as_guest(
     struct event_device *ed, struct event_device *parent)
 {
+	{
+		struct psm_backend *pb = parent->priv_ptr;
+		if (pb->hw_info.model != MOUSE_MODEL_SYNAPTICS ||
+		    !pb->synaptics_info.capPassthrough) {
+			return 1;
+		}
+	}
+
 	ed->priv_ptr = malloc(sizeof(struct psm_backend));
 	if (!ed->priv_ptr)
 		return 1;
