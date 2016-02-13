@@ -1,5 +1,6 @@
 #include "evdevfbsd.h"
 
+#include <sys/capsicum.h>
 #include <sys/event.h>
 #include <sys/param.h>
 
@@ -560,6 +561,10 @@ main(int argc, char **argv)
 	EV_SET(&evs[1], SIGTERM, EVFILT_SIGNAL, EV_ADD, 0, 0, 0);
 	if (kevent(kq, evs, 2, NULL, 0, NULL) == -1)
 		errx(1, "kevent failed");
+
+	if (cap_enter() == -1) {
+		abort();
+	}
 
 	kevent(kq, NULL, 0, evs, 1, NULL);
 
