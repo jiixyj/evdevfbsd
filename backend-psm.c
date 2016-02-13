@@ -270,10 +270,9 @@ synaptic_parse_packet(
     packet[0] = packet[1];
     packet[1] = packet[4];
     packet[2] = packet[5];
-    if (b->guest_dev_fd != -1) {
-      if (write_full_packet(b->guest_dev_fd, packet, 3) == -1) {
-        return -1;
-      }
+    if (b->guest_dev_fd != -1 &&
+        write_full_packet(b->guest_dev_fd, packet, 3) == -1) {
+      return -1;
     }
     return 1;
   } else if (w == 2) {
