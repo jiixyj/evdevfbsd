@@ -17,9 +17,9 @@
 #include "util.h"
 #include "zero_initializer.h"
 
+#include "backend-atkbd.h"
 #include "backend-psm.h"
 #include "backend-sysmouse.h"
-#include "backend-atkbd.h"
 #include "backend-uhid.h"
 
 static atomic_int is_exiting = 0;
@@ -310,7 +310,8 @@ static int evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused,
 
   if ((cmd & IOC_DIRMASK) == IOC_OUT) {
     if ((cmd & ~(unsigned long)ABS_MAX) == EVIOCGABS(0)) {
-      // printf("got ioctl EVIOCGABS for axis %ld\n", cmd & ABS_MAX);
+      // printf("got ioctl EVIOCGABS for axis %ld\n",
+      //     cmd & ABS_MAX);
       return cuse_copy_out(&ed->abs_info[cmd & ABS_MAX], peer_data,
                            (int)MIN(sizeof(struct input_absinfo), len));
     }
@@ -337,7 +338,7 @@ static struct cuse_methods evdevfbsd_methods = {.cm_open = evdevfbsd_open,
                                                 .cm_poll = evdevfbsd_poll,
                                                 .cm_ioctl = evdevfbsd_ioctl};
 
-static void evdevfbsd_hup_catcher(int dummy __unused) {}
+static void evdevfbsd_hup_catcher(int dummy __unused) {};
 
 static void *wait_and_proc(void *notused __unused) {
   int ret;
