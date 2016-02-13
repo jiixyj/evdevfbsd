@@ -29,7 +29,6 @@ struct synaptics_slot_state {
 };
 
 struct psm_backend {
-	int fd;
 	mousehw_t hw_info;
 	int guest_dev_fd;
 
@@ -324,7 +323,7 @@ psm_fill_function(struct event_device *ed)
 	int obuttons = 0;
 	unsigned char packet[PSM_PACKET_MAX_SIZE];
 
-	while (psm_read_full_packet(ed, b->fd, packet, packetsize) == 0) {
+	while (psm_read_full_packet(ed, ed->fd, packet, packetsize) == 0) {
 		struct timeval tv;
 		get_clock_value(ed, &tv);
 
@@ -403,7 +402,7 @@ psm_open_as_guest(struct event_device *ed, struct event_device *parent)
 	if (fcntl(fds[1], F_SETFL, O_NONBLOCK) == -1)
 		goto fail;
 
-	b->fd = fds[0];
+	ed->fd = fds[0];
 
 	b->hw_info.model = MOUSE_MODEL_TRACKPOINT;
 
@@ -449,15 +448,15 @@ psm_backend_init(struct event_device *ed)
 
 	struct psm_backend *b = ed->priv_ptr;
 
-	b->fd = open("/dev/bpsm0", O_RDONLY);
-	if (b->fd == -1)
+	ed->fd = open("/dev/bpsm0", O_RDONLY);
+	if (ed->fd == -1)
 		goto fail;
 
 	int level = 2;
-	if (ioctl(b->fd, MOUSE_SETLEVEL, &level) == -1)
+	if (ioctl(ed->fd, MOUSE_SETLEVEL, &level) == -1)
 		goto fail;
 
-	if (ioctl(b->fd, MOUSE_GETHWINFO, &b->hw_info) == -1)
+	if (ioctl(ed->fd, MOUSE_GETHWINFO, &b->hw_info) == -1)
 		goto fail;
 
 	ed->iid.bustype = BUS_I8042;
@@ -468,7 +467,7 @@ psm_backend_init(struct event_device *ed)
 	case MOUSE_MODEL_SYNAPTICS:
 		ed->device_name = "SynPS/2 Synaptics TouchPad";
 		ed->iid.product = PSMOUSE_SYNAPTICS;
-		if (ioctl(b->fd, MOUSE_SYN_GETHWINFO, &b->synaptics_info) ==
+		if (ioctl(ed->fd, MOUSE_SYN_GETHWINFO, &b->synaptics_info) ==
 		    -1)
 			goto fail;
 		b->ews.x = b->ews.y = b->ews.z = 0;
