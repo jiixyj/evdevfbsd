@@ -16,18 +16,18 @@
 #define AT_ERR 0xff
 
 // those could be both a release event and a "normal" key press or control code
-static const uint16_t ambivalent_keys[] = {AT_BAT, AT_ERR,   AT_ACK,
-                                           AT_NAK, AT_HANJA, AT_HANGEUL};
+static const uint16_t ambivalent_keys[] = {
+    AT_BAT, AT_ERR, AT_ACK, AT_NAK, AT_HANJA, AT_HANGEUL};
 
 struct atkbd_state {
-  int escape;
-  bool release_extraction_state[nitems(ambivalent_keys)];
+	int escape;
+	bool release_extraction_state[nitems(ambivalent_keys)];
 };
 
 struct atkbd_backend {
-  int atkbd_fd;
-  int vkbd_fd;
-  struct atkbd_state atkbd;
+	int atkbd_fd;
+	int vkbd_fd;
+	struct atkbd_state atkbd;
 };
 
 int atkbd_backend_init(struct event_device *ed);
