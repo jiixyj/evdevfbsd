@@ -511,24 +511,25 @@ main(int argc, char **argv)
 	if ((ret = cuse_init()) < 0)
 		errx(1, "cuse_init returned %d", ret);
 
-	struct event_device ed;
-	event_device_init(&ed); // XXX
-	if (event_device_open(&ed, argv[0]))
+	struct event_device eds[8];
+	for (unsigned i = 0; i < nitems(eds); ++i) {
+		event_device_init(&eds[i]); // XXX
+	}
+	size_t nr_eds = 0;
+
+	if (event_device_open(&eds[nr_eds], argv[0]))
 		errx(1, "could not open event device");
 
-	bool has_guest_device = false;
-	struct event_device ed_guest;
-	if (ed.backend_type == PSM_BACKEND) {
-		event_device_init(&ed_guest); // XXX
-		if (event_device_open_as_guest(&ed_guest, &ed) == 0)
-			has_guest_device = true;
+	++nr_eds;
+
+	if (eds[0].backend_type == PSM_BACKEND) {
+		if (event_device_open_as_guest(&eds[nr_eds], &eds[0]) == 0) {
+			++nr_eds;
+		}
 	}
 
-	if (create_cuse_device(&ed))
-		errx(1, "failed to create event device");
-
-	if (has_guest_device) {
-		if (create_cuse_device(&ed_guest))
+	for (unsigned i = 0; i < nr_eds; ++i) {
+		if (create_cuse_device(&eds[i]))
 			errx(1, "failed to create event device");
 	}
 
@@ -537,11 +538,9 @@ main(int argc, char **argv)
 		errx(1, "failed to daemonize");
 	}
 
-	pthread_create(&ed.fill_thread, NULL, fill_thread_starter, &ed); // XXX
-	if (has_guest_device) {
-		pthread_create(&ed_guest.fill_thread, NULL,
-		    fill_thread_starter,
-		    &ed_guest); // XXX
+	for (unsigned i = 0; i < nr_eds; ++i) {
+		pthread_create(&eds[i].fill_thread, NULL, fill_thread_starter,
+		    &eds[i]); // XXX
 	}
 
 	pthread_t worker[4];
@@ -577,13 +576,10 @@ main(int argc, char **argv)
 
 	fprintf(stderr, "workers joined...\n");
 
-	if (has_guest_device) {
-		cuse_dev_destroy(ed_guest.cuse_device);
-		event_device_cleanup(&ed_guest);
+	for (unsigned i = 0; i < nr_eds; ++i) {
+		cuse_dev_destroy(eds[nr_eds - 1 - i].cuse_device);
+		event_device_cleanup(&eds[nr_eds - 1 - i]);
 	}
-
-	cuse_dev_destroy(ed.cuse_device);
-	event_device_cleanup(&ed);
 
 	fprintf(stderr, "closing...\n");
 }
