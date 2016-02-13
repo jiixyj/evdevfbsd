@@ -366,7 +366,10 @@ static struct cuse_methods evdevfbsd_methods = {.cm_open = evdevfbsd_open,
     .cm_poll = evdevfbsd_poll,
     .cm_ioctl = evdevfbsd_ioctl};
 
-static void evdevfbsd_hup_catcher(int dummy __unused){};
+static void
+evdevfbsd_hup_catcher(int dummy __unused)
+{
+}
 
 static void *
 wait_and_proc(void *notused __unused)
