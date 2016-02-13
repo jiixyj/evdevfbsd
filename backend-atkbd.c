@@ -68,13 +68,14 @@ static bool release_extraction_needed(struct atkbd_state *atkbd, uint16_t code) 
 static void calculate_release_extraction_state(struct atkbd_state *atkbd,
                                         uint16_t code) {
   for (unsigned i = 0; i < nitems(ambivalent_keys); ++i) {
-    // check if the release of this key can be mistaken for one of the
-    // ambivalent keys
+    // check if the release of this key can be mistaken
+    // for one of the ambivalent keys
     if (((code ^ ambivalent_keys[i]) & 0x7f) == 0) {
       if (code & 0x80) {
         atkbd->release_extraction_state[i] = false;
       } else {
-        // key has been pressed, need to extract release bit when released
+        // key has been pressed, need to extract
+        // release bit when released
         atkbd->release_extraction_state[i] = true;
       }
       break;
