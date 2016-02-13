@@ -3,9 +3,6 @@
 
 #include "evdevfbsd.h"
 
-#include <dev/usb/usbhid.h>
-#include <usbhid.h>
-
 int uhid_backend_init(struct event_device *ed, char const *path);
 
 #endif

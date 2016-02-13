@@ -1,7 +1,7 @@
 #include "backend-uhid.h"
 
-#include <sys/types.h>
 #include <sys/sysctl.h>
+#include <sys/types.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +11,9 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <unistd.h>
+
+#include <dev/usb/usbhid.h>
+#include <usbhid.h>
 
 #include "util.h"
 
