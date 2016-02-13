@@ -412,18 +412,14 @@ event_device_open(struct event_device *eds, size_t neds, char const *path)
 		return -1;
 	}
 
-	int nr_eds = 0;
+	int nr_eds = 0, inited_eds;
 
 	if (!strcmp(path, "/dev/bpsm0") || !strcmp(path, "/dev/psm0")) {
-		if (psm_backend_init(eds))
+		inited_eds = psm_backend_init(eds);
+		if (inited_eds == -1) {
 			return -1;
-		eds->fill_function = psm_fill_function;
-		eds->backend_type = PSM_BACKEND;
-		++nr_eds;
-
-		if (psm_open_as_guest(&eds[1], &eds[0]) == 0) {
-			++nr_eds;
 		}
+		nr_eds += inited_eds;
 	}
 	else if (!strcmp(path, "/dev/sysmouse") ||
 	    !strcmp(path, "/dev/ums0")) {
@@ -532,7 +528,7 @@ main(int argc, char **argv)
 	size_t nr_eds = 0;
 
 	int new_eds = event_device_open(eds, nitems(eds), argv[0]);
-	if (new_eds == -1) {
+	if (new_eds <= 0) {
 		errx(1, "could not open event device(s)");
 	}
 

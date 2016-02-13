@@ -115,117 +115,6 @@ synaptics_setup_abs_axes(
 	return 0;
 }
 
-int
-psm_backend_init(struct event_device *ed)
-{
-	ed->priv_ptr = malloc(sizeof(struct psm_backend));
-	if (!ed->priv_ptr)
-		return 1;
-
-	struct psm_backend *b = ed->priv_ptr;
-
-	b->fd = open("/dev/bpsm0", O_RDONLY);
-	if (b->fd == -1)
-		goto fail;
-
-	int level = 2;
-	if (ioctl(b->fd, MOUSE_SETLEVEL, &level) == -1)
-		goto fail;
-
-	if (ioctl(b->fd, MOUSE_GETHWINFO, &b->hw_info) == -1)
-		goto fail;
-
-	ed->iid.bustype = BUS_I8042;
-	ed->iid.vendor = 0x02;
-	b->guest_dev_fd = -1;
-
-	switch (b->hw_info.model) {
-	case MOUSE_MODEL_SYNAPTICS:
-		ed->device_name = "SynPS/2 Synaptics TouchPad";
-		ed->iid.product = PSMOUSE_SYNAPTICS;
-		if (ioctl(b->fd, MOUSE_SYN_GETHWINFO, &b->synaptics_info) ==
-		    -1)
-			goto fail;
-		b->ews.x = b->ews.y = b->ews.z = 0;
-		b->ss[0].x = b->ss[0].y = 0;
-		b->ss[1].x = b->ss[1].y = 0;
-		b->ss[0].tracking_id = b->ss[1].tracking_id = -1;
-
-		printf("synaptics info:\n");
-		printf(
-		    "  capPalmDetect: %d\n", b->synaptics_info.capPalmDetect);
-		printf("  capMultiFinger: %d\n",
-		    b->synaptics_info.capMultiFinger);
-		printf("  capAdvancedGestures: %d\n",
-		    b->synaptics_info.capAdvancedGestures);
-		printf("  capEWmode: %d\n", b->synaptics_info.capEWmode);
-		printf("  nExtendedQueries: %d\n",
-		    b->synaptics_info.nExtendedQueries);
-
-		set_bit(ed->prop_bits, INPUT_PROP_POINTER);
-		set_bit(ed->event_bits, EV_ABS);
-		set_bit(ed->event_bits, EV_KEY);
-		set_bit(ed->key_bits, BTN_LEFT);
-		set_bit(ed->key_bits, BTN_RIGHT);
-		if (b->synaptics_info.capMiddle) {
-			set_bit(ed->key_bits, BTN_MIDDLE);
-		}
-		if (b->synaptics_info.capFourButtons) {
-			set_bit(ed->key_bits, BTN_FORWARD);
-			set_bit(ed->key_bits, BTN_BACK);
-		}
-		set_bit(ed->key_bits, BTN_TOUCH);
-		set_bit(ed->key_bits, BTN_TOOL_FINGER);
-		if (b->synaptics_info.capMultiFinger ||
-		    b->synaptics_info.capAdvancedGestures) {
-			set_bit(ed->key_bits, BTN_TOOL_DOUBLETAP);
-			set_bit(ed->key_bits, BTN_TOOL_TRIPLETAP);
-		}
-
-		if (synaptics_setup_abs_axes(ed, b, ABS_X, ABS_Y))
-			goto fail;
-
-		if (b->synaptics_info.capAdvancedGestures) {
-			if (synaptics_setup_abs_axes(
-				ed, b, ABS_MT_POSITION_X, ABS_MT_POSITION_Y))
-				goto fail;
-			set_bit(ed->prop_bits, INPUT_PROP_SEMI_MT);
-			set_bit(ed->abs_bits, ABS_MT_SLOT);
-			ed->abs_info[ABS_MT_SLOT].minimum = 0;
-			ed->abs_info[ABS_MT_SLOT].maximum = 1;
-			set_bit(ed->abs_bits, ABS_MT_TRACKING_ID);
-			ed->abs_info[ABS_MT_TRACKING_ID].minimum = 0;
-			ed->abs_info[ABS_MT_TRACKING_ID].maximum = 0xffff;
-		}
-
-		set_bit(ed->abs_bits, ABS_PRESSURE);
-		ed->abs_info[ABS_PRESSURE].minimum = 0;
-		ed->abs_info[ABS_PRESSURE].maximum = 255;
-		if (b->synaptics_info.capPalmDetect) {
-			set_bit(ed->abs_bits, ABS_TOOL_WIDTH);
-			ed->abs_info[ABS_TOOL_WIDTH].minimum = 0;
-			ed->abs_info[ABS_TOOL_WIDTH].maximum = 15;
-		}
-
-		break;
-	case MOUSE_MODEL_TRACKPOINT:
-		ed->device_name = "TPPS/2 IBM TrackPoint";
-		ed->iid.product = PSMOUSE_TRACKPOINT;
-		set_bits_generic_ps2(ed);
-		break;
-	case MOUSE_MODEL_GENERIC:
-		ed->device_name = "Generic Mouse"; // XXX not sure
-		ed->iid.product = PSMOUSE_PS2;     // XXX not sure
-		set_bits_generic_ps2(ed);
-		break;
-	}
-
-	return 0;
-fail:
-	free(ed->priv_ptr);
-	return 1;
-}
-
 static int
 psm_is_async(struct event_device *ed, unsigned char *buf)
 {
@@ -425,7 +314,7 @@ synaptic_parse_packet(struct event_device *ed, struct timeval *tv,
 	return 0;
 }
 
-void *
+static void *
 psm_fill_function(struct event_device *ed)
 {
 	struct psm_backend *b = ed->priv_ptr;
@@ -499,7 +388,7 @@ psm_fill_function(struct event_device *ed)
 	return NULL;
 }
 
-int
+static int
 psm_open_as_guest(
     struct event_device *ed, struct event_device *parent)
 {
@@ -559,4 +448,123 @@ fail:
 	}
 	free(ed->priv_ptr);
 	return 1;
+}
+
+int
+psm_backend_init(struct event_device *ed)
+{
+	ed->priv_ptr = malloc(sizeof(struct psm_backend));
+	if (!ed->priv_ptr)
+		return -1;
+
+	struct psm_backend *b = ed->priv_ptr;
+
+	b->fd = open("/dev/bpsm0", O_RDONLY);
+	if (b->fd == -1)
+		goto fail;
+
+	int level = 2;
+	if (ioctl(b->fd, MOUSE_SETLEVEL, &level) == -1)
+		goto fail;
+
+	if (ioctl(b->fd, MOUSE_GETHWINFO, &b->hw_info) == -1)
+		goto fail;
+
+	ed->iid.bustype = BUS_I8042;
+	ed->iid.vendor = 0x02;
+	b->guest_dev_fd = -1;
+
+	switch (b->hw_info.model) {
+	case MOUSE_MODEL_SYNAPTICS:
+		ed->device_name = "SynPS/2 Synaptics TouchPad";
+		ed->iid.product = PSMOUSE_SYNAPTICS;
+		if (ioctl(b->fd, MOUSE_SYN_GETHWINFO, &b->synaptics_info) ==
+		    -1)
+			goto fail;
+		b->ews.x = b->ews.y = b->ews.z = 0;
+		b->ss[0].x = b->ss[0].y = 0;
+		b->ss[1].x = b->ss[1].y = 0;
+		b->ss[0].tracking_id = b->ss[1].tracking_id = -1;
+
+		printf("synaptics info:\n");
+		printf(
+		    "  capPalmDetect: %d\n", b->synaptics_info.capPalmDetect);
+		printf("  capMultiFinger: %d\n",
+		    b->synaptics_info.capMultiFinger);
+		printf("  capAdvancedGestures: %d\n",
+		    b->synaptics_info.capAdvancedGestures);
+		printf("  capEWmode: %d\n", b->synaptics_info.capEWmode);
+		printf("  nExtendedQueries: %d\n",
+		    b->synaptics_info.nExtendedQueries);
+
+		set_bit(ed->prop_bits, INPUT_PROP_POINTER);
+		set_bit(ed->event_bits, EV_ABS);
+		set_bit(ed->event_bits, EV_KEY);
+		set_bit(ed->key_bits, BTN_LEFT);
+		set_bit(ed->key_bits, BTN_RIGHT);
+		if (b->synaptics_info.capMiddle) {
+			set_bit(ed->key_bits, BTN_MIDDLE);
+		}
+		if (b->synaptics_info.capFourButtons) {
+			set_bit(ed->key_bits, BTN_FORWARD);
+			set_bit(ed->key_bits, BTN_BACK);
+		}
+		set_bit(ed->key_bits, BTN_TOUCH);
+		set_bit(ed->key_bits, BTN_TOOL_FINGER);
+		if (b->synaptics_info.capMultiFinger ||
+		    b->synaptics_info.capAdvancedGestures) {
+			set_bit(ed->key_bits, BTN_TOOL_DOUBLETAP);
+			set_bit(ed->key_bits, BTN_TOOL_TRIPLETAP);
+		}
+
+		if (synaptics_setup_abs_axes(ed, b, ABS_X, ABS_Y))
+			goto fail;
+
+		if (b->synaptics_info.capAdvancedGestures) {
+			if (synaptics_setup_abs_axes(
+				ed, b, ABS_MT_POSITION_X, ABS_MT_POSITION_Y))
+				goto fail;
+			set_bit(ed->prop_bits, INPUT_PROP_SEMI_MT);
+			set_bit(ed->abs_bits, ABS_MT_SLOT);
+			ed->abs_info[ABS_MT_SLOT].minimum = 0;
+			ed->abs_info[ABS_MT_SLOT].maximum = 1;
+			set_bit(ed->abs_bits, ABS_MT_TRACKING_ID);
+			ed->abs_info[ABS_MT_TRACKING_ID].minimum = 0;
+			ed->abs_info[ABS_MT_TRACKING_ID].maximum = 0xffff;
+		}
+
+		set_bit(ed->abs_bits, ABS_PRESSURE);
+		ed->abs_info[ABS_PRESSURE].minimum = 0;
+		ed->abs_info[ABS_PRESSURE].maximum = 255;
+		if (b->synaptics_info.capPalmDetect) {
+			set_bit(ed->abs_bits, ABS_TOOL_WIDTH);
+			ed->abs_info[ABS_TOOL_WIDTH].minimum = 0;
+			ed->abs_info[ABS_TOOL_WIDTH].maximum = 15;
+		}
+
+		break;
+	case MOUSE_MODEL_TRACKPOINT:
+		ed->device_name = "TPPS/2 IBM TrackPoint";
+		ed->iid.product = PSMOUSE_TRACKPOINT;
+		set_bits_generic_ps2(ed);
+		break;
+	case MOUSE_MODEL_GENERIC:
+		ed->device_name = "Generic Mouse"; // XXX not sure
+		ed->iid.product = PSMOUSE_PS2;     // XXX not sure
+		set_bits_generic_ps2(ed);
+		break;
+	}
+
+	ed->fill_function = psm_fill_function;
+	ed->backend_type = PSM_BACKEND;
+
+	if (psm_open_as_guest(&ed[1], &ed[0]) == 0) {
+		return 2;
+	} else {
+		return 1;
+	}
+
+fail:
+	free(ed->priv_ptr);
+	return -1;
 }
