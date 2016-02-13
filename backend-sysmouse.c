@@ -6,8 +6,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include "util.h"
 #include "backend-psm.h"
+#include "util.h"
 
 int sysmouse_backend_init(struct event_device *ed, char const *path) {
   ed->priv_ptr = malloc(sizeof(struct sysmouse_backend));
