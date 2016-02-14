@@ -465,14 +465,44 @@ usage(char const *program_name)
 	exit(1);
 }
 
+static int cfd = -1;
+
+static int
+open_consolectl_fd()
+{
+	if (cfd != -1) {
+		return 0;
+	}
+	cfd = open("/dev/consolectl", O_RDWR, 0);
+	if (cfd != -1) {
+		system("for tty in /dev/ttyv*;"
+		       "do vidcontrol < $tty -m on; done");
+		return 0;
+	} else {
+		perror("open");
+		return -1;
+	}
+}
+
+int
+get_cfd()
+{
+	return cfd;
+}
+
 int
 main(int argc, char **argv)
 {
 	char *program_name = argv[0];
 	int ch;
 
-	while ((ch = getopt(argc, argv, "")) != -1) {
+	while ((ch = getopt(argc, argv, "c")) != -1) {
 		switch (ch) {
+		case 'c':
+			if (open_consolectl_fd() == -1) {
+				return EXIT_FAILURE;
+			}
+			break;
 		default:
 			usage(argv[0]);
 		}

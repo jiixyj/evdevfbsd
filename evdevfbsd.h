@@ -55,4 +55,6 @@ struct event_device {
 	int32_t mt_state[MAX_SLOTS][ABS_MT_LAST - ABS_MT_FIRST + 1];
 };
 
+int get_cfd(void);
+
 #endif

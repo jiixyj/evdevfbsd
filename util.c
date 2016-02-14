@@ -130,6 +130,11 @@ put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
 			return;
 	}
 
+	int cfd = get_cfd();
+	if (cfd == -1) {
+		return;
+	}
+
 	static pthread_mutex_t cons_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 	pthread_mutex_lock(&cons_mutex);
@@ -137,18 +142,6 @@ put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
 	static struct mouse_data md;
 	static struct timeval last_left;
 	static int left_times;
-	static int cfd;
-	if (cfd == 0) {
-		cfd = open("/dev/consolectl", O_RDWR, 0);
-		if (cfd != -1) {
-			system("for tty in /dev/ttyv*;"
-			       "do vidcontrol < $tty -m on; done");
-		}
-	}
-	if (cfd == -1) {
-		pthread_mutex_unlock(&cons_mutex);
-		return;
-	}
 
 	if (type == EV_REL) {
 		if (code == REL_X)
