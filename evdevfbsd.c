@@ -651,15 +651,19 @@ main(int argc, char **argv)
 	}
 
 	struct pollfd pfds[nitems(eds) + 1] = {ZERO_INITIALIZER};
+	struct event_device *poll_to_ed[nitems(pfds)] = ZERO_INITIALIZER;
 	for (unsigned i = 0; i < nitems(pfds); ++i) {
 		pfds[i].fd = -1;
 	}
 	pfds[0].fd = kq;
 	pfds[0].events = POLLIN;
+	unsigned npfds = 1;
 	for (unsigned i = 0; i < nr_eds; ++i) {
 		if (eds[i].do_poll) {
-			pfds[i + 1].fd = eds[i].fd;
-			pfds[i + 1].events = POLLIN;
+			pfds[npfds].fd = eds[i].fd;
+			pfds[npfds].events = POLLIN;
+			poll_to_ed[npfds] = &eds[i];
+			++npfds;
 		}
 	}
 
@@ -679,7 +683,7 @@ main(int argc, char **argv)
 		goto exit;
 	}
 
-	while (poll(pfds, nitems(pfds), INFTIM) > 0) {
+	while (poll(pfds, npfds, INFTIM) > 0) {
 		if (pfds[0].revents & POLLIN) {
 			struct timespec ts = ZERO_INITIALIZER;
 			for (;;) {
@@ -701,7 +705,7 @@ main(int argc, char **argv)
 				}
 			}
 		}
-		for (unsigned i = 1; i < nitems(pfds); ++i) {
+		for (unsigned i = 1; i < npfds; ++i) {
 			if (pfds[i].fd != -1 && (pfds[i].revents & POLLIN)) {
 				struct event_device *ed = &eds[i - 1];
 				// fprintf(stderr, "handle p\n");
