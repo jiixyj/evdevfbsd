@@ -638,6 +638,9 @@ main(int argc, char **argv)
 			if (kevent(kq, evs, 1, NULL, 0, NULL) == -1) {
 				int err = errno;
 				if (err == ENODEV) {
+					fprintf(stderr,
+					    "device does not support kqueue, "
+					    "falling back to poll\n");
 					eds[i].do_poll = true;
 				} else {
 					perror("kevent");
