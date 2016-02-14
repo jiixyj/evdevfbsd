@@ -461,7 +461,7 @@ static void usage(char const *program_name) __attribute__((noreturn));
 static void
 usage(char const *program_name)
 {
-	fprintf(stderr, "usage: %s <device>\n", program_name);
+	fprintf(stderr, "usage: %s [-c] <device>\n", program_name);
 	exit(1);
 }
 
