@@ -18,7 +18,6 @@
 #include "util.h"
 
 struct uhid_backend {
-	int fd;
 	report_desc_t report_desc;
 	char desc[1024];
 	char path[32];
@@ -160,73 +159,74 @@ parse_hid_item(
 	}
 }
 
-static void *
-uhid_fill_function(struct event_device *ed)
+static int
+uhid_read_packet(struct event_device *ed)
 {
 	struct uhid_backend *b = ed->priv_ptr;
 
-	bool use_rid = !!hid_get_report_id(b->fd);
+	bool use_rid = !!hid_get_report_id(ed->fd);
 
 	int dlen = hid_report_size(b->report_desc, hid_input, -1);
 	if (dlen <= 0) {
-		return NULL;
+		return -1;
 	}
 
-	for (;;) {
-		uint8_t dbuf[1024] = {0};
+	ssize_t ret;
 
-		if (use_rid) {
-			if (read(b->fd, dbuf, 1) != 1) {
-				break;
-			}
-			dlen = hid_report_size(
-			    b->report_desc, hid_input, dbuf[0]);
-			if (dlen <= 1) {
-				break;
-			}
-			--dlen;
+	if (use_rid && ed->packet_pos == 0) {
+		if ((ret = read(ed->fd, ed->packet_buf, 1)) == -1 &&
+		    errno == EAGAIN) {
+			return 1;
 		}
-
-		if ((unsigned)dlen > sizeof(dbuf) - 1) {
-			abort();
+		if (ret != 1) {
+			return -1;
 		}
-		if (read(b->fd, use_rid ? &dbuf[1] : dbuf, (unsigned)dlen) !=
-		    dlen) {
-			break;
+		ed->packet_pos = 1;
+
+		dlen = hid_report_size(
+		    b->report_desc, hid_input, ed->packet_buf[0]);
+		if (dlen <= 1) {
+			return -1;
 		}
-
-#if 0
-		if (use_rid) {
-			++dlen;
-		}
-		for (size_t i = 0; i < (unsigned)dlen; ++i) {
-			printf("%02x ", dbuf[i]);
-		}
-		printf("\n");
-#endif
-
-		struct timeval tv;
-		get_clock_value(ed, &tv);
-
-		if (use_rid && dbuf[0] != 1) {
-			continue;
-		}
-
-		pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
-
-		event_client_need_free_bufsize(ed, 32);
-
-		for (size_t i = 0; i < b->hiditems_used; ++i) {
-			parse_hid_item(ed, tv, dbuf, i);
-		}
-
-		put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
-		cuse_poll_wakeup();
-
-		pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
 	}
 
-	return NULL;
+	if ((unsigned)dlen > sizeof(ed->packet_buf) - 1) {
+		return -1;
+	}
+
+	do {
+		ret = read(ed->fd, &ed->packet_buf[ed->packet_pos],
+		    (unsigned)dlen - ed->packet_pos);
+
+		if (ret == -1) {
+			return errno == EAGAIN ? 1 : -1;
+		} else {
+			ed->packet_pos += (size_t)ret;
+		}
+	} while (ed->packet_pos != (unsigned)dlen);
+
+	return 0;
+}
+
+static int
+uhid_parse_packet(struct event_device *ed)
+{
+	struct uhid_backend *b = ed->priv_ptr;
+
+	bool use_rid = !!hid_get_report_id(ed->fd);
+
+	if (use_rid && ed->packet_buf[0] != 1) {
+		return 1;
+	}
+
+	event_client_need_free_bufsize(ed, 32);
+
+	for (size_t i = 0; i < b->hiditems_used; ++i) {
+		parse_hid_item(ed, ed->packet_time, ed->packet_buf, i);
+	}
+
+	put_event(ed, &ed->packet_time, EV_SYN, SYN_REPORT, 0);
+	return 0;
 }
 
 static int
@@ -401,17 +401,17 @@ uhid_backend_init(struct event_device *ed, char const *path)
 
 	struct uhid_backend *b = ed->priv_ptr;
 
-	b->fd = open(path, O_RDONLY);
-	if (b->fd == -1)
+	ed->fd = open(path, O_RDONLY | O_NONBLOCK);
+	if (ed->fd == -1)
 		goto fail;
 
 	hid_init(NULL);
 
-	b->report_desc = hid_get_report_desc(b->fd);
+	b->report_desc = hid_get_report_desc(ed->fd);
 	if (b->report_desc == 0)
 		goto fail;
 
-	bool use_rid = !!hid_get_report_id(b->fd);
+	bool use_rid = !!hid_get_report_id(ed->fd);
 
 	int dlen = hid_report_size(b->report_desc, hid_input, -1);
 	if (dlen <= 0) {
@@ -422,7 +422,7 @@ uhid_backend_init(struct event_device *ed, char const *path)
 
 // TODO: remove goto logic
 reread:;
-	struct pollfd pfd = {b->fd, POLLIN, 0};
+	struct pollfd pfd = {ed->fd, POLLIN, 0};
 	int ret;
 	do {
 		ret = poll(&pfd, 1, 500);
@@ -433,7 +433,7 @@ reread:;
 	}
 
 	if (use_rid) {
-		if (read(b->fd, dbuf, 1) != 1) {
+		if (read(ed->fd, dbuf, 1) != 1) {
 			goto fail;
 		}
 		dlen = hid_report_size(b->report_desc, hid_input, dbuf[0]);
@@ -446,7 +446,7 @@ reread:;
 	if ((unsigned)dlen > sizeof(dbuf) - 1) {
 		abort();
 	}
-	if (read(b->fd, use_rid ? &dbuf[1] : dbuf, (unsigned)dlen) != dlen) {
+	if (read(ed->fd, use_rid ? &dbuf[1] : dbuf, (unsigned)dlen) != dlen) {
 		goto fail;
 	}
 	if (use_rid && dbuf[0] != 1) {
@@ -512,7 +512,8 @@ skip_reading:
 	}
 	ed->device_name = b->desc;
 
-	ed->fill_function = uhid_fill_function;
+	ed->read_packet = uhid_read_packet;
+	ed->parse_packet = uhid_parse_packet;
 	ed->backend_type = UHID_BACKEND;
 
 	return 1;
