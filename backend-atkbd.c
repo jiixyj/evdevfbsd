@@ -148,6 +148,8 @@ write_keycode(int fd, unsigned int kc)
 static int
 atkbd_read_packet(struct event_device *ed)
 {
+	struct atkbd_backend *b = ed->priv_ptr;
+
 	ssize_t ret = read(ed->fd, ed->packet_buf, 1);
 
 	if (ret == -1 && errno == EAGAIN) {
@@ -157,6 +159,10 @@ atkbd_read_packet(struct event_device *ed)
 	}
 
 	ed->packet_pos = 1;
+
+	if (!write_keycode(b->vkbd_fd, ed->packet_buf[0]))
+		return -1;
+
 	return 0;
 }
 
@@ -229,9 +235,6 @@ atkbd_parse_packet(struct event_device *ed)
 		}
 	}
 
-	if (!write_keycode(b->vkbd_fd, raw_code))
-		return -1;
-
 	return 0;
 }
 
@@ -273,7 +276,7 @@ atkbd_backend_init(struct event_device *ed)
 
 	detach_atkbd();
 
-	ed->fd = open("/dev/atkbd0", O_RDWR);
+	ed->fd = open("/dev/atkbd0", O_RDWR | O_NONBLOCK);
 	if (ed->fd == -1 || ioctl(ed->fd, KDSKBMODE, K_RAW) == -1) {
 		reattach_atkbd_part1();
 
