@@ -129,29 +129,39 @@ psm_is_async(struct event_device *ed, unsigned char *buf)
 }
 
 static int
-psm_read_full_packet(
-    struct event_device *ed, unsigned char *buf, size_t siz)
+psm_read_full_packet(struct event_device *ed, size_t siz)
 {
+	uint8_t *buf = ed->packet_buf;
 	unsigned char *obuf = buf;
 	size_t osiz = siz;
+
+	buf += ed->packet_pos;
+	siz -= ed->packet_pos;
 
 	ssize_t ret;
 	while (siz) {
 		ret = read(ed->fd, buf, siz);
-		if (ret <= 0)
+		if (ret == -1 && errno == EAGAIN) {
+			return 1;
+		} else if (ret <= 0) {
 			return -1;
+		}
 		siz -= (size_t)ret;
 		buf += (size_t)ret;
+		ed->packet_pos += (size_t)ret;
 	}
 
 	while (psm_is_async(ed, obuf)) {
 		fprintf(stderr, "syncing...");
 		memmove(obuf, obuf + 1, osiz - 1);
-		if (read(ed->fd, obuf + osiz - 1, 1) != 1)
+		ret = read(ed->fd, obuf + osiz - 1, 1);
+		if (ret == -1 && errno == EAGAIN) {
+			ed->packet_pos -= 1;
+			return 1;
+		} else if (ret != 1) {
 			return -1;
+		}
 	}
-
-	ed->packet_pos = osiz;
 
 	return 0;
 }
@@ -324,11 +334,12 @@ psm_read_packet(struct event_device *ed)
 		break;
 	}
 
-	if (ed->packet_pos != 0) {
+	if (ed->packet_pos > packetsize) {
+		// must not happen
 		abort();
 	}
 
-	return psm_read_full_packet(ed, ed->packet_buf, packetsize);
+	return psm_read_full_packet(ed, packetsize);
 }
 
 static int
@@ -440,7 +451,7 @@ psm_backend_init(struct event_device *ed)
 
 	struct psm_backend *b = ed->priv_ptr;
 
-	ed->fd = open("/dev/bpsm0", O_RDONLY);
+	ed->fd = open("/dev/psm0", O_RDONLY);
 	if (ed->fd == -1)
 		goto fail;
 

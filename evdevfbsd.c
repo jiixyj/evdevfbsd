@@ -511,6 +511,9 @@ handle_new_input(struct event_device *ed)
 		if (ret == -1) {
 			return -1;
 		}
+	} else if (ret == 1) {
+		// fprintf(stderr, "packet incomplete, pos at %d\n",
+		//     (int)ed->packet_pos);
 	}
 
 	return 0;
@@ -658,6 +661,7 @@ main(int argc, char **argv)
 
 				if (evs[0].filter == EVFILT_READ) {
 					struct event_device *ed = evs[0].udata;
+					// fprintf(stderr, "handle k\n");
 					if (handle_new_input(ed) == -1) {
 						goto exit;
 					}
@@ -669,6 +673,7 @@ main(int argc, char **argv)
 		for (unsigned i = 1; i < nitems(pfds); ++i) {
 			if (pfds[i].fd != -1 && (pfds[i].revents & POLLIN)) {
 				struct event_device *ed = &eds[i - 1];
+				// fprintf(stderr, "handle p\n");
 				if (handle_new_input(ed) == -1) {
 					goto exit;
 				}
