@@ -130,14 +130,14 @@ psm_is_async(struct event_device *ed, unsigned char *buf)
 
 static int
 psm_read_full_packet(
-    struct event_device *ed, int fd, unsigned char *buf, size_t siz)
+    struct event_device *ed, unsigned char *buf, size_t siz)
 {
 	unsigned char *obuf = buf;
 	size_t osiz = siz;
 
 	ssize_t ret;
 	while (siz) {
-		ret = read(fd, buf, siz);
+		ret = read(ed->fd, buf, siz);
 		if (ret <= 0)
 			return 1;
 		siz -= (size_t)ret;
@@ -147,7 +147,7 @@ psm_read_full_packet(
 	while (psm_is_async(ed, obuf)) {
 		puts("syncing...");
 		memmove(obuf, obuf + 1, osiz - 1);
-		if (read(fd, obuf + osiz - 1, 1) != 1)
+		if (read(ed->fd, obuf + osiz - 1, 1) != 1)
 			return 1;
 	}
 
@@ -323,7 +323,7 @@ psm_fill_function(struct event_device *ed)
 	int obuttons = 0;
 	unsigned char packet[PSM_PACKET_MAX_SIZE];
 
-	while (psm_read_full_packet(ed, ed->fd, packet, packetsize) == 0) {
+	while (psm_read_full_packet(ed, packet, packetsize) == 0) {
 		struct timeval tv;
 		get_clock_value(ed, &tv);
 
