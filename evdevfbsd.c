@@ -13,6 +13,7 @@
 
 #include <err.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -490,6 +491,31 @@ get_cfd()
 	return cfd;
 }
 
+static int
+handle_new_input(struct event_device *ed)
+{
+	int ret = ed->read_packet(ed);
+	if (ret == -1) {
+		return -1;
+	} else if (ret == 0) {
+		struct timeval tv;
+		get_clock_value(ed, &tv);
+		ed->packet_time = tv;
+		pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
+		ret = ed->parse_packet(ed);
+		ed->packet_pos = 0;
+		if (ret == 0) {
+			cuse_poll_wakeup();
+		}
+		pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
+		if (ret == -1) {
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -538,8 +564,11 @@ main(int argc, char **argv)
 	}
 
 	for (unsigned i = 0; i < nr_eds; ++i) {
-		pthread_create(&eds[i].fill_thread, NULL, fill_thread_starter,
-		    &eds[i]); // XXX
+		if (eds[i].fill_function) {
+			pthread_create(&eds[i].fill_thread, NULL,
+			    fill_thread_starter,
+			    &eds[i]); // XXX
+		}
 	}
 
 	pthread_t worker[4];
@@ -548,20 +577,56 @@ main(int argc, char **argv)
 		pthread_create(&worker[i], NULL, wait_and_proc, NULL); // XXX
 	}
 
+	if (cap_enter() == -1) {
+		fprintf(stderr, "error entering capabilities mode\n");
+		goto exit;
+	}
+
 	signal(SIGINT, SIG_IGN);
 	signal(SIGTERM, SIG_IGN);
-	int kq = kqueue();
-	if (kq == -1)
-		errx(1, "failed to create kqueue");
 
+	int kq = kqueue();
+	if (kq == -1) {
+		perror("kqueue");
+		goto exit;
+	}
+
+	// main event loop
 	struct kevent evs[2];
 	EV_SET(&evs[0], SIGINT, EVFILT_SIGNAL, EV_ADD, 0, 0, 0);
 	EV_SET(&evs[1], SIGTERM, EVFILT_SIGNAL, EV_ADD, 0, 0, 0);
-	if (kevent(kq, evs, 2, NULL, 0, NULL) == -1)
-		errx(1, "kevent failed");
+	if (kevent(kq, evs, 2, NULL, 0, NULL) == -1) {
+		perror("kevent");
+		goto exit;
+	}
 
-	if (cap_enter() == -1) {
-		abort();
+	for (unsigned i = 0; i < nr_eds; ++i) {
+		if (eds[i].fill_function == NULL) {
+			EV_SET(&evs[0], eds[i].fd, EVFILT_READ, EV_ADD, 0, 0,
+			    &eds[i]);
+			if (kevent(kq, evs, 1, NULL, 0, NULL) == -1) {
+				int err = errno;
+				if (err == ENODEV) {
+					eds[i].do_poll = true;
+				} else {
+					perror("kevent");
+					goto exit;
+				}
+			}
+		}
+	}
+
+	struct pollfd pfds[nitems(eds) + 1] = {ZERO_INITIALIZER};
+	for (unsigned i = 0; i < nitems(pfds); ++i) {
+		pfds[i].fd = -1;
+	}
+	pfds[0].fd = kq;
+	pfds[0].events = POLLIN;
+	for (unsigned i = 0; i < nr_eds; ++i) {
+		if (eds[i].do_poll) {
+			pfds[i + 1].fd = eds[i].fd;
+			pfds[i + 1].events = POLLIN;
+		}
 	}
 
 	// we are ready!
@@ -576,11 +641,42 @@ main(int argc, char **argv)
 	    write(1, ready_line, strlen(ready_line)) !=
 		(ssize_t)strlen(ready_line) ||
 	    close(1) != 0) {
-		abort();
+		fprintf(stderr, "error printing ready line\n");
+		goto exit;
 	}
 
-	kevent(kq, NULL, 0, evs, 1, NULL);
+	while (poll(pfds, nitems(pfds), INFTIM) > 0) {
+		if (pfds[0].revents & POLLIN) {
+			struct timespec ts = ZERO_INITIALIZER;
+			for (;;) {
+				int nev = kevent(kq, NULL, 0, evs, 1, &ts);
+				if (nev == 0) {
+					break;
+				} else if (nev != 1) {
+					goto exit;
+				}
 
+				if (evs[0].filter == EVFILT_READ) {
+					struct event_device *ed = evs[0].udata;
+					if (handle_new_input(ed) == -1) {
+						goto exit;
+					}
+				} else {
+					goto exit;
+				}
+			}
+		}
+		for (unsigned i = 1; i < nitems(pfds); ++i) {
+			if (pfds[i].fd != -1 && (pfds[i].revents & POLLIN)) {
+				struct event_device *ed = &eds[i - 1];
+				if (handle_new_input(ed) == -1) {
+					goto exit;
+				}
+			}
+		}
+	}
+
+exit:
 	is_exiting = 1;
 
 	for (unsigned i = 0; i < nitems(worker); ++i) {

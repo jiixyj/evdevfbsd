@@ -139,7 +139,7 @@ psm_read_full_packet(
 	while (siz) {
 		ret = read(ed->fd, buf, siz);
 		if (ret <= 0)
-			return 1;
+			return -1;
 		siz -= (size_t)ret;
 		buf += (size_t)ret;
 	}
@@ -148,8 +148,10 @@ psm_read_full_packet(
 		fprintf(stderr, "syncing...");
 		memmove(obuf, obuf + 1, osiz - 1);
 		if (read(ed->fd, obuf + osiz - 1, 1) != 1)
-			return 1;
+			return -1;
 	}
+
+	ed->packet_pos = osiz;
 
 	return 0;
 }
@@ -185,10 +187,12 @@ synaptic_parse_ew_packet(struct event_device *ed, unsigned char *packet)
 }
 
 static int
-synaptic_parse_packet(struct event_device *ed, struct timeval *tv,
-    unsigned char packet[PSM_PACKET_MAX_SIZE], int *buttons)
+synaptic_parse_packet(
+    struct event_device *ed, unsigned char packet[PSM_PACKET_MAX_SIZE])
 {
 	struct psm_backend *b = ed->priv_ptr;
+	struct timeval const *tv = &ed->packet_time;
+	int buttons = 0;
 
 	event_client_need_free_bufsize(ed, 24);
 	int w = ((packet[0] & 0x30) >> 2) | ((packet[0] & 0x04) >> 1) |
@@ -212,18 +216,18 @@ synaptic_parse_packet(struct event_device *ed, struct timeval *tv,
 	}
 
 	if (packet[0] & 0x01)
-		*buttons |= (1 << 0);
+		buttons |= (1 << 0);
 	if (packet[0] & 0x02)
-		*buttons |= (1 << 1);
+		buttons |= (1 << 1);
 
 	if (b->synaptics_info.capFourButtons) {
 		if ((packet[3] ^ packet[0]) & 0x01)
-			*buttons |= (1 << 5);
+			buttons |= (1 << 5);
 		if ((packet[3] ^ packet[0]) & 0x02)
-			*buttons |= (1 << 6);
+			buttons |= (1 << 6);
 	} else if (b->synaptics_info.capMiddle) {
 		if ((packet[0] ^ packet[3]) & 0x01)
-			*buttons |= (1 << 2);
+			buttons |= (1 << 2);
 	}
 
 	int x = (((packet[3] & 0x10) << 8) | ((packet[1] & 0x0f) << 8) |
@@ -245,11 +249,11 @@ synaptic_parse_packet(struct event_device *ed, struct timeval *tv,
 		}
 	}
 
-	put_event(ed, tv, EV_KEY, BTN_LEFT, !!(*buttons & (1 << 0)));
-	put_event(ed, tv, EV_KEY, BTN_RIGHT, !!(*buttons & (1 << 1)));
-	put_event(ed, tv, EV_KEY, BTN_MIDDLE, !!(*buttons & (1 << 2)));
-	put_event(ed, tv, EV_KEY, BTN_FORWARD, !!(*buttons & (1 << 5)));
-	put_event(ed, tv, EV_KEY, BTN_BACK, !!(*buttons & (1 << 6)));
+	put_event(ed, tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
+	put_event(ed, tv, EV_KEY, BTN_RIGHT, !!(buttons & (1 << 1)));
+	put_event(ed, tv, EV_KEY, BTN_MIDDLE, !!(buttons & (1 << 2)));
+	put_event(ed, tv, EV_KEY, BTN_FORWARD, !!(buttons & (1 << 5)));
+	put_event(ed, tv, EV_KEY, BTN_BACK, !!(buttons & (1 << 6)));
 
 	if (b->synaptics_info.capAdvancedGestures) {
 		if (no_fingers >= 2) {
@@ -305,8 +309,8 @@ synaptic_parse_packet(struct event_device *ed, struct timeval *tv,
 	return 0;
 }
 
-static void *
-psm_fill_function(struct event_device *ed)
+static int
+psm_read_packet(struct event_device *ed)
 {
 	struct psm_backend *b = ed->priv_ptr;
 
@@ -320,62 +324,49 @@ psm_fill_function(struct event_device *ed)
 		break;
 	}
 
-	int obuttons = 0;
-	unsigned char packet[PSM_PACKET_MAX_SIZE];
-
-	while (psm_read_full_packet(ed, packet, packetsize) == 0) {
-		struct timeval tv;
-		get_clock_value(ed, &tv);
-
-		pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
-
-		switch (b->hw_info.model) {
-		case MOUSE_MODEL_SYNAPTICS: {
-			int buttons = 0;
-			int ret =
-			    synaptic_parse_packet(ed, &tv, packet, &buttons);
-			if (ret == -1) {
-				pthread_mutex_unlock(
-				    &ed->event_buffer_mutex); // XXX
-				return NULL;
-			} else if (ret == 0) {
-				cuse_poll_wakeup();
-				obuttons = buttons;
-			}
-			break;
-		}
-		case MOUSE_MODEL_GENERIC:
-		case MOUSE_MODEL_TRACKPOINT: {
-			event_client_need_free_bufsize(ed, 6);
-			int buttons = (packet[0] & 0x07);
-			int x = (packet[0] & (1 << 4)) ? packet[1] - 256
-						       : packet[1];
-			int y = (packet[0] & (1 << 5)) ? packet[2] - 256
-						       : packet[2];
-			y = -y;
-
-			put_event(
-			    ed, &tv, EV_KEY, BTN_LEFT, !!(buttons & (1 << 0)));
-			put_event(ed, &tv, EV_KEY, BTN_RIGHT,
-			    !!(buttons & (1 << 1)));
-			put_event(ed, &tv, EV_KEY, BTN_MIDDLE,
-			    !!(buttons & (1 << 2)));
-
-			if (x)
-				put_event(ed, &tv, EV_REL, REL_X, x);
-			if (y)
-				put_event(ed, &tv, EV_REL, REL_Y, y);
-
-			put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
-			cuse_poll_wakeup();
-			obuttons = buttons;
-		}
-		}
-
-		pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
+	if (ed->packet_pos != 0) {
+		abort();
 	}
 
-	return NULL;
+	return psm_read_full_packet(ed, ed->packet_buf, packetsize);
+}
+
+static int
+psm_parse_packet(struct event_device *ed)
+{
+	struct psm_backend *b = ed->priv_ptr;
+
+	uint8_t *packet = ed->packet_buf;
+
+	switch (b->hw_info.model) {
+	case MOUSE_MODEL_SYNAPTICS: {
+		return synaptic_parse_packet(ed, packet);
+	}
+	case MOUSE_MODEL_GENERIC:
+	case MOUSE_MODEL_TRACKPOINT: {
+		event_client_need_free_bufsize(ed, 6);
+		int buttons = (packet[0] & 0x07);
+		int x = (packet[0] & (1 << 4)) ? packet[1] - 256 : packet[1];
+		int y = (packet[0] & (1 << 5)) ? packet[2] - 256 : packet[2];
+		y = -y;
+
+		put_event(ed, &ed->packet_time, EV_KEY, BTN_LEFT,
+		    !!(buttons & (1 << 0)));
+		put_event(ed, &ed->packet_time, EV_KEY, BTN_RIGHT,
+		    !!(buttons & (1 << 1)));
+		put_event(ed, &ed->packet_time, EV_KEY, BTN_MIDDLE,
+		    !!(buttons & (1 << 2)));
+
+		if (x)
+			put_event(ed, &ed->packet_time, EV_REL, REL_X, x);
+		if (y)
+			put_event(ed, &ed->packet_time, EV_REL, REL_Y, y);
+
+		put_event(ed, &ed->packet_time, EV_SYN, SYN_REPORT, 0);
+	}
+	}
+
+	return 0;
 }
 
 static int
@@ -423,7 +414,8 @@ psm_open_as_guest(struct event_device *ed, struct event_device *parent)
 	b->guest_dev_fd = fds[1];
 	pthread_mutex_unlock(&parent->event_buffer_mutex); // XXX
 
-	ed->fill_function = psm_fill_function;
+	ed->read_packet = psm_read_packet;
+	ed->parse_packet = psm_parse_packet;
 	ed->backend_type = PSM_BACKEND;
 
 	return 0;
@@ -546,7 +538,9 @@ psm_backend_init(struct event_device *ed)
 		break;
 	}
 
-	ed->fill_function = psm_fill_function;
+	ed->fill_function = NULL;
+	ed->read_packet = psm_read_packet;
+	ed->parse_packet = psm_parse_packet;
 	ed->backend_type = PSM_BACKEND;
 
 	if (psm_open_as_guest(&ed[1], &ed[0]) == 0) {

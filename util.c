@@ -44,7 +44,7 @@ compare_times(struct timeval tv1, struct timeval tv2)
 }
 
 void
-put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
+put_event(struct event_device *ed, struct timeval const *tv, uint16_t type,
     uint16_t code, int32_t value)
 {
 	if (type == EV_KEY) {
@@ -192,7 +192,7 @@ put_event(struct event_device *ed, struct timeval *tv, uint16_t type,
 }
 
 void
-enable_mt_slot(struct event_device *ed, struct timeval *tv, int32_t slot)
+enable_mt_slot(struct event_device *ed, struct timeval const *tv, int32_t slot)
 {
 	put_event(ed, tv, EV_ABS, ABS_MT_SLOT, slot);
 	if (ed->mt_state[slot][ABS_MT_TRACKING_ID - ABS_MT_FIRST] == -1) {
@@ -206,7 +206,8 @@ enable_mt_slot(struct event_device *ed, struct timeval *tv, int32_t slot)
 }
 
 void
-disable_mt_slot(struct event_device *ed, struct timeval *tv, int32_t slot)
+disable_mt_slot(
+    struct event_device *ed, struct timeval const *tv, int32_t slot)
 {
 	if (ed->mt_state[slot][ABS_MT_TRACKING_ID - ABS_MT_FIRST] >= 0) {
 		put_event(ed, tv, EV_ABS, ABS_MT_SLOT, slot);

@@ -32,10 +32,17 @@ struct event_device {
 	pthread_mutex_t event_buffer_mutex;
 	pthread_t fill_thread;
 	void *(*fill_function)(struct event_device *);
+	int (*read_packet)(struct event_device *);
+	int (*parse_packet)(struct event_device *);
 	uint16_t tracking_ids;
 	int clock;
 	int backend_type;
 	struct cuse_dev *cuse_device;
+
+	int do_poll;
+	uint8_t packet_buf[1024];
+	size_t packet_pos;
+	struct timeval packet_time;
 	void *priv_ptr;
 
 	struct input_id iid;
