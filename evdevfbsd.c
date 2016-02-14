@@ -432,16 +432,20 @@ create_cuse_device(struct event_device *ed)
 	char device_name[32] = ZERO_INITIALIZER;
 	for (int i = 0; i < 32; ++i) {
 		if (snprintf(device_name, sizeof(device_name),
-			"/dev/input/event%d", i) == -1)
+			"/dev/input/event%d", i) == -1) {
 			errx(1, "snprintf failed");
-		if (access(device_name, F_OK))
+		}
+
+		ed->cuse_device = cuse_dev_create(
+		    &evdevfbsd_methods, ed, NULL, 0, 0, 0666, &device_name[5]);
+		if (ed->cuse_device) {
 			break;
+		}
 	}
 
-	ed->cuse_device = cuse_dev_create(
-	    &evdevfbsd_methods, ed, NULL, 0, 0, 0666, &device_name[5]);
-	if (!ed->cuse_device)
+	if (!ed->cuse_device) {
 		return -1;
+	}
 
 	return 0;
 }
