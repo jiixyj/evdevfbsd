@@ -231,11 +231,10 @@ uhid_parse_packet(struct event_device *ed)
 
 static int
 parse_input_descriptor(
-    struct event_device *ed, uint8_t *dbuf, struct hid_item h)
+    struct event_device *ed, struct hid_item h)
 {
 	struct uhid_backend *b = ed->priv_ptr;
 
-	int32_t data = hid_get_data(dbuf, &h);
 	char const *usage_page = hid_usage_page(HID_PAGE(h.usage));
 	char const *usage_in_page = hid_usage_in_page(h.usage);
 	uint32_t usage = HID_USAGE(h.usage);
@@ -253,7 +252,6 @@ parse_input_descriptor(
 
 				set_bit(ed->event_bits, EV_KEY);
 				set_bit(ed->key_bits, slot);
-				ed->key_state[slot] = data;
 			} else {
 				// TODO: fix reporting of unknown keys
 			}
@@ -300,7 +298,6 @@ parse_input_descriptor(
 
 		set_bit(ed->event_bits, EV_KEY);
 		set_bit(ed->key_bits, slot);
-		ed->key_state[slot] = data;
 	} else if (!strcmp(usage_page, "Generic_Desktop")) {
 		if (!strcmp(usage_in_page, "X") ||
 		    !strcmp(usage_in_page, "Y") ||
@@ -318,8 +315,6 @@ parse_input_descriptor(
 				b->hiditem_types[b->hiditems_used] = EV_ABS;
 				set_bit(ed->event_bits, EV_ABS);
 				set_bit(ed->abs_bits, slot);
-				ed->abs_state[slot] = data;
-				ed->abs_info[slot].value = data;
 				ed->abs_info[slot].minimum = h.logical_minimum;
 				ed->abs_info[slot].maximum = h.logical_maximum;
 				ed->abs_info[slot].fuzz =
@@ -362,8 +357,6 @@ parse_input_descriptor(
 				b->hiditem_types[b->hiditems_used] = EV_ABS;
 				set_bit(ed->event_bits, EV_ABS);
 				set_bit(ed->abs_bits, slot);
-				ed->abs_state[slot] = data;
-				ed->abs_info[slot].value = data;
 				ed->abs_info[slot].minimum = h.logical_minimum;
 				ed->abs_info[slot].maximum = h.logical_maximum;
 				ed->abs_info[slot].fuzz =
@@ -411,49 +404,6 @@ uhid_backend_init(struct event_device *ed, char const *path)
 	if (b->report_desc == 0)
 		goto fail;
 
-	bool use_rid = !!hid_get_report_id(ed->fd);
-
-	int dlen = hid_report_size(b->report_desc, hid_input, -1);
-	if (dlen <= 0) {
-		goto fail;
-	}
-
-	uint8_t dbuf[1024] = {0};
-
-// TODO: remove goto logic
-reread:;
-	struct pollfd pfd = {ed->fd, POLLIN, 0};
-	int ret;
-	do {
-		ret = poll(&pfd, 1, 500);
-	} while (ret == -1 && errno == EINTR);
-	if (ret <= 0 || !(pfd.revents & POLLIN)) {
-		fprintf(stderr, "skip initial HID packet...\n");
-		goto skip_reading;
-	}
-
-	if (use_rid) {
-		if (read(ed->fd, dbuf, 1) != 1) {
-			goto fail;
-		}
-		dlen = hid_report_size(b->report_desc, hid_input, dbuf[0]);
-		if (dlen <= 1) {
-			goto fail;
-		}
-		--dlen;
-	}
-
-	if ((unsigned)dlen > sizeof(dbuf) - 1) {
-		abort();
-	}
-	if (read(ed->fd, use_rid ? &dbuf[1] : dbuf, (unsigned)dlen) != dlen) {
-		goto fail;
-	}
-	if (use_rid && dbuf[0] != 1) {
-		goto reread;
-	}
-
-skip_reading:
 	b->hiditems_used = 0;
 	memset(b->hiditem_types, '\0', sizeof(b->hiditem_types));
 
@@ -481,7 +431,7 @@ skip_reading:
 			--collection_stack;
 			break;
 		case hid_input: {
-			ret = parse_input_descriptor(ed, dbuf, h);
+			int ret = parse_input_descriptor(ed, h);
 			if (ret == -1) {
 				goto fail;
 			}
