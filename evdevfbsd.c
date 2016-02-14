@@ -3,6 +3,8 @@
 #include <sys/capsicum.h>
 #include <sys/event.h>
 #include <sys/param.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #include <errno.h>
 #include <signal.h>
@@ -561,6 +563,29 @@ main(int argc, char **argv)
 
 	nr_eds = (size_t)new_eds;
 
+	int cleanup_pipe[2];
+	if (eds[0].backend_type == ATKBD_BACKEND) {
+		if (pipe(cleanup_pipe) == -1) {
+			errx(1, "could not create cleanup pipe");
+		}
+		signal(SIGCHLD, SIG_IGN);
+		pid_t cleanup_process = fork();
+		if (cleanup_process == 0) {
+			signal(SIGINT, SIG_IGN);
+			signal(SIGTERM, SIG_IGN);
+			char c;
+			read(cleanup_pipe[0], &c, 1);
+			for (unsigned i = 0; i < nr_eds; ++i) {
+				event_device_cleanup(&eds[nr_eds - 1 - i]);
+			}
+			write(cleanup_pipe[0], &c, 1);
+			exit(0);
+		} else if (cleanup_process == -1) {
+			perror("fork");
+			exit(1);
+		}
+	}
+
 	for (unsigned i = 0; i < nr_eds; ++i) {
 		if (create_cuse_device(&eds[i]))
 			errx(1, "failed to create event device");
@@ -693,7 +718,16 @@ exit:
 
 	for (unsigned i = 0; i < nr_eds; ++i) {
 		cuse_dev_destroy(eds[nr_eds - 1 - i].cuse_device);
+	}
+
+	for (unsigned i = 0; i < nr_eds; ++i) {
 		event_device_cleanup(&eds[nr_eds - 1 - i]);
+	}
+
+	if (eds[0].backend_type == ATKBD_BACKEND) {
+		char c = '\0';
+		write(cleanup_pipe[1], &c, 1);
+		read(cleanup_pipe[1], &c, 1);
 	}
 
 	fprintf(stderr, "closing...\n");

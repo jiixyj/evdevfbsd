@@ -3,6 +3,7 @@
 #include <sys/kbio.h>
 #include <sys/param.h>
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,7 +33,6 @@ struct atkbd_state {
 };
 
 struct atkbd_backend {
-	int atkbd_fd;
 	int vkbd_fd;
 	struct atkbd_state atkbd;
 };
@@ -138,98 +138,94 @@ write_keycode(int fd, unsigned int kc)
 	return true;
 }
 
-static void *
-atkbd_fill_function(struct event_device *ed)
+static int
+atkbd_read_packet(struct event_device *ed)
+{
+	ssize_t ret = read(ed->fd, ed->packet_buf, 1);
+
+	if (ret == -1 && errno == EAGAIN) {
+		return 1;
+	} else if (ret != 1) {
+		return -1;
+	}
+
+	ed->packet_pos = 1;
+	return 0;
+}
+
+static int
+atkbd_parse_packet(struct event_device *ed)
 {
 	struct atkbd_backend *b = ed->priv_ptr;
 
-	for (;;) {
-		uint8_t raw_code;
-		ssize_t ret = read(b->atkbd_fd, &raw_code, 1);
+	uint8_t raw_code = ed->packet_buf[0];
 
-		if (ret == -1 || ret == 0)
-			break;
+	event_client_need_free_bufsize(ed, 8);
 
-		struct timeval tv;
-		get_clock_value(ed, &tv);
-
-		pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
-
-		event_client_need_free_bufsize(ed, 8);
-
-		uint16_t code = raw_code;
-		bool release = false;
-		if (b->atkbd.escape ||
-		    release_extraction_needed(&b->atkbd, code)) {
-			release = code >> 7;
-			code &= 0x7f;
-		}
-		if (!b->atkbd.escape) {
-			calculate_release_extraction_state(
-			    &b->atkbd, raw_code);
-		}
-
-		if (code == AT_ES0) {
-			b->atkbd.escape = 1;
-			goto next;
-		} else if (code == AT_ES1) {
-			b->atkbd.escape = 2;
-			goto next;
-		} else if (code == AT_BAT || code == AT_REL ||
-		    code == AT_ACK || code == AT_NAK || code == AT_ERR) {
-			fprintf(
-			    stderr, "unexpected control code: %d\n", +code);
-			goto next;
-		}
-
-		code = raw_to_scan(b->atkbd.escape, code);
-
-		if (b->atkbd.escape > 0) {
-			--b->atkbd.escape;
-			if (b->atkbd.escape > 0)
-				goto next;
-		}
-
-		uint16_t evdev_code = scan_to_evdev[code];
-		if (evdev_code != 255) {
-			put_event(ed, &tv, EV_MSC, MSC_SCAN, code);
-		}
-
-		if (evdev_code == 255) {
-			goto next;
-		} else if (evdev_code == 0) {
-			fprintf(stderr, "unknown key encountered\n");
-			put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
-		} else {
-			int evdev_value;
-			if (release) {
-				evdev_value = 0;
-			} else if (ed->key_state[evdev_code]) {
-				evdev_value = 2;
-			} else {
-				evdev_value = 1;
-			}
-
-			put_event(ed, &tv, EV_KEY, evdev_code, evdev_value);
-			put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
-
-			if (evdev_value &&
-			    (code == AT_HANJA || code == AT_HANGEUL)) {
-				put_event(ed, &tv, EV_MSC, MSC_SCAN, code);
-				put_event(ed, &tv, EV_KEY, evdev_code, 0);
-				put_event(ed, &tv, EV_SYN, SYN_REPORT, 0);
-			}
-		}
-
-	next:
-		cuse_poll_wakeup();
-
-		pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
-		if (!write_keycode(b->vkbd_fd, raw_code))
-			break;
+	uint16_t code = raw_code;
+	bool release = false;
+	if (b->atkbd.escape || release_extraction_needed(&b->atkbd, code)) {
+		release = code >> 7;
+		code &= 0x7f;
+	}
+	if (!b->atkbd.escape) {
+		calculate_release_extraction_state(&b->atkbd, raw_code);
 	}
 
-	return NULL;
+	if (code == AT_ES0) {
+		b->atkbd.escape = 1;
+		return 1;
+	} else if (code == AT_ES1) {
+		b->atkbd.escape = 2;
+		return 1;
+	} else if (code == AT_BAT || code == AT_REL || code == AT_ACK ||
+	    code == AT_NAK || code == AT_ERR) {
+		fprintf(stderr, "unexpected control code: %d\n", +code);
+		return 1;
+	}
+
+	code = raw_to_scan(b->atkbd.escape, code);
+
+	if (b->atkbd.escape > 0) {
+		--b->atkbd.escape;
+		if (b->atkbd.escape > 0)
+			return 1;
+	}
+
+	uint16_t evdev_code = scan_to_evdev[code];
+	if (evdev_code != 255) {
+		put_event(ed, &ed->packet_time, EV_MSC, MSC_SCAN, code);
+	}
+
+	if (evdev_code == 255) {
+		return 1;
+	} else if (evdev_code == 0) {
+		fprintf(stderr, "unknown key encountered\n");
+		put_event(ed, &ed->packet_time, EV_SYN, SYN_REPORT, 0);
+	} else {
+		int evdev_value;
+		if (release) {
+			evdev_value = 0;
+		} else if (ed->key_state[evdev_code]) {
+			evdev_value = 2;
+		} else {
+			evdev_value = 1;
+		}
+
+		put_event(ed, &ed->packet_time, EV_KEY, evdev_code, evdev_value);
+		put_event(ed, &ed->packet_time, EV_SYN, SYN_REPORT, 0);
+
+		if (evdev_value && (code == AT_HANJA || code == AT_HANGEUL)) {
+			put_event(ed, &ed->packet_time, EV_MSC, MSC_SCAN, code);
+			put_event(ed, &ed->packet_time, EV_KEY, evdev_code, 0);
+			put_event(ed, &ed->packet_time, EV_SYN, SYN_REPORT, 0);
+		}
+	}
+
+	if (!write_keycode(b->vkbd_fd, raw_code))
+		return -1;
+
+	return 0;
 }
 
 void
@@ -239,13 +235,11 @@ atkbd_backend_cleanup(struct event_device *ed)
 
 	reattach_atkbd_part1();
 
-	if (b->atkbd_fd != -1)
-		close(b->atkbd_fd);
+	if (ed->fd != -1)
+		close(ed->fd);
 
 	if (b->vkbd_fd != -1)
 		close(b->vkbd_fd);
-
-	pthread_join(ed->fill_thread, NULL);
 
 	reattach_atkbd_part2();
 }
@@ -272,12 +266,12 @@ atkbd_backend_init(struct event_device *ed)
 
 	detach_atkbd();
 
-	b->atkbd_fd = open("/dev/atkbd0", O_RDWR);
-	if (b->atkbd_fd == -1 || ioctl(b->atkbd_fd, KDSKBMODE, K_RAW) == -1) {
+	ed->fd = open("/dev/atkbd0", O_RDWR);
+	if (ed->fd == -1 || ioctl(ed->fd, KDSKBMODE, K_RAW) == -1) {
 		reattach_atkbd_part1();
 
-		if (b->atkbd_fd != -1)
-			close(b->atkbd_fd);
+		if (ed->fd != -1)
+			close(ed->fd);
 		close(b->vkbd_fd);
 
 		reattach_atkbd_part2();
@@ -293,7 +287,8 @@ atkbd_backend_init(struct event_device *ed)
 	set_bit(ed->event_bits, EV_MSC);
 	set_bit(ed->msc_bits, MSC_SCAN);
 
-	ed->fill_function = atkbd_fill_function;
+	ed->read_packet = atkbd_read_packet;
+	ed->parse_packet = atkbd_parse_packet;
 	ed->backend_type = ATKBD_BACKEND;
 
 	return 1;
