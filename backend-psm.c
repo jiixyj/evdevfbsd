@@ -475,6 +475,7 @@ psm_backend_init(struct event_device *ed)
 		b->ss[1].x = b->ss[1].y = 0;
 		b->ss[0].tracking_id = b->ss[1].tracking_id = -1;
 
+#if 0
 		printf("synaptics info:\n");
 		printf(
 		    "  capPalmDetect: %d\n", b->synaptics_info.capPalmDetect);
@@ -485,6 +486,7 @@ psm_backend_init(struct event_device *ed)
 		printf("  capEWmode: %d\n", b->synaptics_info.capEWmode);
 		printf("  nExtendedQueries: %d\n",
 		    b->synaptics_info.nExtendedQueries);
+#endif
 
 		set_bit(ed->prop_bits, INPUT_PROP_POINTER);
 		set_bit(ed->event_bits, EV_ABS);
