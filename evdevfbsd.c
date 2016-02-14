@@ -429,21 +429,21 @@ event_device_cleanup(struct event_device *ed)
 static int
 create_cuse_device(struct event_device *ed)
 {
-	char device_name[32] = ZERO_INITIALIZER;
 	for (int i = 0; i < 32; ++i) {
-		if (snprintf(device_name, sizeof(device_name),
-			"/dev/input/event%d", i) == -1) {
+		if (snprintf(ed->cuse_dev_name, sizeof(ed->cuse_dev_name),
+			"input/event%d", i) == -1) {
 			errx(1, "snprintf failed");
 		}
 
-		ed->cuse_device = cuse_dev_create(
-		    &evdevfbsd_methods, ed, NULL, 0, 0, 0666, &device_name[5]);
+		ed->cuse_device = cuse_dev_create(&evdevfbsd_methods, ed, NULL,
+		    0, 0, 0666, ed->cuse_dev_name);
 		if (ed->cuse_device) {
 			break;
 		}
 	}
 
 	if (!ed->cuse_device) {
+		ed->cuse_dev_name[0] = '\0';
 		return -1;
 	}
 
@@ -561,6 +561,21 @@ main(int argc, char **argv)
 		errx(1, "kevent failed");
 
 	if (cap_enter() == -1) {
+		abort();
+	}
+
+	// we are ready!
+	char ready_line[1024] = ZERO_INITIALIZER;
+	for (unsigned i = 0; i < nr_eds; ++i) {
+		snprintf(ready_line, sizeof(ready_line),
+		    ready_line[0] == '\0' ? "%s%s" : "%s:%s", ready_line,
+		    eds[i].cuse_dev_name);
+	}
+	snprintf(ready_line, sizeof(ready_line), "%s\n", ready_line);
+	if (strlen(ready_line) >= 1023 ||
+	    write(1, ready_line, strlen(ready_line)) !=
+		(ssize_t)strlen(ready_line) ||
+	    close(1) != 0) {
 		abort();
 	}
 
