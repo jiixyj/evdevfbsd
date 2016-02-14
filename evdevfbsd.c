@@ -457,7 +457,7 @@ static void usage(char const *program_name) __attribute__((noreturn));
 static void
 usage(char const *program_name)
 {
-	fprintf(stderr, "usage: %s [-d] <device>\n", program_name);
+	fprintf(stderr, "usage: %s <device>\n", program_name);
 	exit(1);
 }
 
@@ -466,13 +466,9 @@ main(int argc, char **argv)
 {
 	char *program_name = argv[0];
 	int ch;
-	bool daemonize = false;
 
-	while ((ch = getopt(argc, argv, "d")) != -1) {
+	while ((ch = getopt(argc, argv, "")) != -1) {
 		switch (ch) {
-		case 'd':
-			daemonize = true;
-			break;
 		default:
 			usage(argv[0]);
 		}
@@ -505,11 +501,6 @@ main(int argc, char **argv)
 	for (unsigned i = 0; i < nr_eds; ++i) {
 		if (create_cuse_device(&eds[i]))
 			errx(1, "failed to create event device");
-	}
-
-	if (daemonize && daemon(0, 0) == -1) {
-		perror("daemon");
-		errx(1, "failed to daemonize");
 	}
 
 	for (unsigned i = 0; i < nr_eds; ++i) {
