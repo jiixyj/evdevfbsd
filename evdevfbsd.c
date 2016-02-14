@@ -45,7 +45,7 @@ event_client_new()
 static int
 evdevfbsd_open(struct cuse_dev *cdev, int fflags __unused)
 {
-	// puts("device opened");
+	// fprintf(stderr, "device opened");
 	struct event_device *ed = cuse_dev_get_priv0(cdev);
 
 	int ret = CUSE_ERR_BUSY;
@@ -339,18 +339,18 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 		}
 	}
 
-	printf("got unknown ioctl %lu %lu %lu\n", cmd, base_cmd, len);
+	fprintf(stderr, "got unknown ioctl %lu %lu %lu\n", cmd, base_cmd, len);
 	unsigned long direction = cmd & IOC_DIRMASK;
 	if (direction == IOC_VOID) {
-		puts("direction: void");
+		fprintf(stderr, "direction: void");
 	} else if (direction == IOC_OUT) {
-		puts("direction: out");
+		fprintf(stderr, "direction: out");
 	} else if (direction == IOC_IN) {
-		puts("direction: in");
+		fprintf(stderr, "direction: in");
 	}
-	printf("length: %lu\n", IOCPARM_LEN(cmd));
-	printf("group: %c\n", (unsigned char)IOCGROUP(cmd));
-	printf("num: %lu 0x%02lx\n", cmd & 0xff, cmd & 0xff);
+	fprintf(stderr, "length: %lu\n", IOCPARM_LEN(cmd));
+	fprintf(stderr, "group: %c\n", (unsigned char)IOCGROUP(cmd));
+	fprintf(stderr, "num: %lu 0x%02lx\n", cmd & 0xff, cmd & 0xff);
 	return CUSE_ERR_INVALID;
 }
 

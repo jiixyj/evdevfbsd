@@ -428,7 +428,7 @@ reread:;
 		ret = poll(&pfd, 1, 500);
 	} while (ret == -1 && errno == EINTR);
 	if (ret <= 0 || !(pfd.revents & POLLIN)) {
-		printf("skip initial HID packet...\n");
+		fprintf(stderr, "skip initial HID packet...\n");
 		goto skip_reading;
 	}
 

@@ -139,8 +139,6 @@ sysmouse_backend_init(struct event_device *ed, char const *path)
 	if (ioctl(b->fd, MOUSE_GETHWINFO, &b->hw_info) == -1)
 		goto fail;
 
-	printf("nr buttons: %d\n", b->hw_info.buttons);
-
 	set_bits_generic_ps2(ed);
 	for (int i = 3; i < b->hw_info.buttons; ++i) {
 		set_bit(ed->key_bits, BTN_MOUSE + i);

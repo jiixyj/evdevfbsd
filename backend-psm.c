@@ -145,7 +145,7 @@ psm_read_full_packet(
 	}
 
 	while (psm_is_async(ed, obuf)) {
-		puts("syncing...");
+		fprintf(stderr, "syncing...");
 		memmove(obuf, obuf + 1, osiz - 1);
 		if (read(ed->fd, obuf + osiz - 1, 1) != 1)
 			return 1;
