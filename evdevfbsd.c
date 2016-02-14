@@ -572,7 +572,7 @@ main(int argc, char **argv)
 		    eds[i].cuse_dev_name);
 	}
 	snprintf(ready_line, sizeof(ready_line), "%s\n", ready_line);
-	if (strlen(ready_line) >= 1023 ||
+	if (strlen(ready_line) >= sizeof(ready_line) - 1 ||
 	    write(1, ready_line, strlen(ready_line)) !=
 		(ssize_t)strlen(ready_line) ||
 	    close(1) != 0) {
