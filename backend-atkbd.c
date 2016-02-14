@@ -108,23 +108,30 @@ calculate_release_extraction_state(struct atkbd_state *atkbd, uint16_t code)
 static void
 detach_atkbd()
 {
-	system("kbdcontrol -K < /dev/console");
-	system("kbdcontrol -A atkbd0 < /dev/kbdmux0");
-	system("kbdcontrol -k /dev/kbdmux0 < /dev/console");
+	system("kbdcontrol -K < /dev/console"
+	       " > /dev/null 2> /dev/null");
+	system("kbdcontrol -A atkbd0 < /dev/kbdmux0"
+	       " > /dev/null 2> /dev/null");
+	system("kbdcontrol -k /dev/kbdmux0 < /dev/console"
+	       " > /dev/null 2> /dev/null");
 }
 
 static void
 reattach_atkbd_part1()
 {
-	system("kbdcontrol -K < /dev/console");
-	system("kbdcontrol -A vkbd0 < /dev/kbdmux0");
+	system("kbdcontrol -K < /dev/console"
+	       " > /dev/null 2> /dev/null");
+	system("kbdcontrol -A vkbd0 < /dev/kbdmux0"
+	       " > /dev/null 2> /dev/null");
 }
 
 static void
 reattach_atkbd_part2()
 {
-	system("kbdcontrol -a atkbd0 < /dev/kbdmux0");
-	system("kbdcontrol -k /dev/kbdmux0 < /dev/console");
+	system("kbdcontrol -a atkbd0 < /dev/kbdmux0"
+	       " > /dev/null 2> /dev/null");
+	system("kbdcontrol -k /dev/kbdmux0 < /dev/console"
+	       " > /dev/null 2> /dev/null");
 }
 
 static bool
