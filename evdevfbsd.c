@@ -563,6 +563,9 @@ main(int argc, char **argv)
 
 	nr_eds = (size_t)new_eds;
 
+	// Spawn a child process that restores the keyboard on exit.
+	// This cannot be done in the parent process, as it is in capabilities
+	// mode by then.
 	int cleanup_pipe[2];
 	if (eds[0].backend_type == ATKBD_BACKEND) {
 		if (pipe(cleanup_pipe) == -1) {
