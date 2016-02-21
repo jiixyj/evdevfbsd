@@ -301,7 +301,30 @@ atkbd_backend_init(struct event_device *ed)
 	ed->iid.bustype = BUS_I8042;
 	ed->iid.vendor = 0x01;
 	ed->iid.product = 0x01;
+	ed->iid.version = 0;
 	ed->device_name = "AT Translated Set 2 keyboard";
+
+	FILE *kb_id_file = popen("/usr/bin/grep 'keyboard ID' "
+				 "/var/run/dmesg.boot | /usr/bin/tail -n 1",
+	    "r");
+	if (kb_id_file) {
+		char line[1024] = {0};
+		fread(line, 1, sizeof(line) - 1, kb_id_file);
+
+		pclose(kb_id_file);
+		kb_id_file = NULL;
+
+		char *id_str = strstr(line, "ID");
+		if (id_str != NULL && strlen(id_str) >= 6) {
+			id_str += 5;
+			unsigned int id = 0;
+			if (sscanf(id_str, "%x", &id) > 0 &&
+			    ((id & 0xffff) == id)) {
+				ed->iid.version = (uint16_t)(
+				    ((id & 0xff00) >> 8) | ((id & 0xff) << 8));
+			}
+		}
+	}
 
 	memset(&b->atkbd, 0, sizeof(b->atkbd));
 
