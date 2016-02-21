@@ -471,8 +471,21 @@ psm_backend_init(struct event_device *ed)
 		ed->device_name = "SynPS/2 Synaptics TouchPad";
 		ed->iid.product = PSMOUSE_SYNAPTICS;
 		if (ioctl(ed->fd, MOUSE_SYN_GETHWINFO, &b->synaptics_info) ==
-		    -1)
+		    -1) {
 			goto fail;
+		}
+
+		ed->iid.version =
+		    (uint16_t)(((!!b->synaptics_info.infoRot180 << 7 |
+				    !!b->synaptics_info.infoPortrait << 6 |
+				    (b->synaptics_info.infoSensor & 0x3f))
+				   << 8) |
+			(!!b->synaptics_info.infoNewAbs << 7 |
+			    !!b->synaptics_info.capPen << 6 |
+			    !!b->synaptics_info.infoSimplC << 5 |
+			    (b->synaptics_info.infoGeometry & 0x0f)) |
+			0x10);
+
 		b->ews.x = b->ews.y = b->ews.z = 0;
 		b->ss[0].x = b->ss[0].y = 0;
 		b->ss[1].x = b->ss[1].y = 0;
