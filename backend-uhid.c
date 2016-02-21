@@ -14,6 +14,8 @@
 
 #include <dev/usb/usbhid.h>
 #include <usbhid.h>
+#include <libusb20.h>
+#include <libusb20_desc.h>
 
 #include "util.h"
 
@@ -418,13 +420,78 @@ uhid_backend_init(struct event_device *ed, char const *path)
 	memset(b->hiditem_types, '\0', sizeof(b->hiditem_types));
 
 	memset(b->desc, '\0', sizeof(b->desc));
-	size_t siz = sizeof(b->desc) - 1;
-	char sysctl_name[64] = {0};
-	snprintf(
-	    sysctl_name, sizeof(sysctl_name), "dev.uhid.%c.%%desc", path[9]);
-	if (sysctlbyname(sysctl_name, b->desc, &siz, NULL, 0) == -1) {
-		perror("sysctlbyname");
-		goto fail;
+	{
+		char sysctl_name[64] = {0};
+		snprintf(sysctl_name, sizeof(sysctl_name),
+		    "dev.uhid.%c.%%location", path[9]);
+
+		char line[1024] = {0};
+		size_t line_size = sizeof(line) - 1;
+
+		if (sysctlbyname(sysctl_name, line, &line_size, NULL, 0) ==
+		    -1) {
+			perror("sysctlbyname");
+			goto fail;
+		}
+
+		char const *bus = strstr(line, "bus=");
+		char const *devaddr = strstr(line, "devaddr=");
+		if (!bus || !devaddr) {
+			goto fail;
+		}
+
+		bus += 4;
+		devaddr += 8;
+
+		int bus_int = 0;
+		int devaddr_int = 0;
+
+		if (sscanf(bus, "%d", &bus_int) <= 0 ||
+		    sscanf(devaddr, "%d", &devaddr_int) <= 0) {
+			goto fail;
+		}
+
+		char line1[1024] = {0};
+		char line2[1024] = {0};
+
+		struct libusb20_backend *pbe;
+		pbe = libusb20_be_alloc_default();
+		if (pbe == NULL) {
+			goto fail;
+		}
+
+		struct libusb20_device *pdev = NULL;
+		while ((pdev = libusb20_be_device_foreach(pbe, pdev))) {
+			if (libusb20_dev_get_bus_number(pdev) == bus_int &&
+			    libusb20_dev_get_address(pdev) == devaddr_int) {
+				if (libusb20_dev_open(pdev, 0)) {
+					libusb20_be_free(pbe);
+					goto fail;
+				}
+
+				struct LIBUSB20_DEVICE_DESC_DECODED *ddesc;
+				ddesc = libusb20_dev_get_device_desc(pdev);
+
+				libusb20_dev_req_string_simple_sync(pdev,
+				    ddesc->iManufacturer, line1,
+				    sizeof(line1));
+				libusb20_dev_req_string_simple_sync(pdev,
+				    ddesc->iProduct, line2, sizeof(line2));
+
+				ed->iid.bustype = BUS_USB;
+				ed->iid.vendor = ddesc->idVendor;
+				ed->iid.product = ddesc->idProduct;
+				ed->iid.version = ddesc->bcdUSB;
+
+				libusb20_dev_close(pdev);
+
+				break;
+			}
+		}
+
+		libusb20_be_free(pbe);
+
+		snprintf(b->desc, sizeof(b->desc), "%s %s", line1, line2);
 	}
 	ed->device_name = b->desc;
 
