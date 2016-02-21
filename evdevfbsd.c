@@ -158,6 +158,86 @@ retry:
 }
 
 static int
+evdevfbsd_write(
+    struct cuse_dev *cdev, int fflags __unused, const void *user_ptr, int len)
+{
+	if (len < 0)
+		return CUSE_ERR_INVALID;
+
+	if (len < (int)sizeof(struct input_event))
+		return CUSE_ERR_INVALID;
+
+	int requested_events = len / (int)sizeof(struct input_event);
+
+	struct event_device *ed = cuse_dev_get_priv0(cdev);
+
+	struct timeval tv;
+	get_clock_value(ed, &tv);
+
+	struct event_client_state *client_state =
+	    cuse_dev_get_per_file_handle(cdev);
+
+	// always succeed
+	int retval = requested_events * (int)sizeof(struct input_event);
+
+	// ignore events from other devices if grabbed
+	if (ed->exclusive_client && ed->exclusive_client != client_state) {
+		return retval;
+	}
+
+	pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
+	event_client_need_free_bufsize(ed, requested_events);
+
+	struct input_event const *user_events = user_ptr;
+
+	bool did_put_event = false;
+
+	for (int i = 0; i < requested_events; ++i) {
+		bool do_put_event = false;
+
+		struct input_event ev;
+		if (cuse_copy_in(&user_events[i], &ev,
+			(int)sizeof(struct input_event)) != 0) {
+			fprintf(stderr, "error copying in\n");
+			continue;
+		}
+
+		if (get_bit(ed->event_bits, ev.type, EV_MAX)) {
+			if (ev.type == EV_LED) {
+				if (get_bit(ed->led_bits, ev.code, LED_MAX)) {
+					do_put_event = true;
+				}
+			}
+		}
+
+		if (ev.type == EV_SYN) {
+			if (ev.code <= SYN_MAX) {
+				do_put_event = true;
+			}
+		}
+
+		if (do_put_event) {
+			put_event(ed, &tv, ev.type, ev.code, ev.value);
+			if (ed->handle_injected_event) {
+				ed->handle_injected_event(ed, &ev);
+			}
+			did_put_event = true;
+		} else {
+			fprintf(stderr, "did not put event %d %d %d\n",
+			    (int)ev.type, (int)ev.code, (int)ev.value);
+		}
+	}
+
+	if (did_put_event) {
+		cuse_poll_wakeup();
+	}
+
+	pthread_mutex_unlock(&ed->event_buffer_mutex); // XXX
+
+	return retval;
+}
+
+static int
 evdevfbsd_poll(struct cuse_dev *cdev, int fflags __unused, int events)
 {
 	if (!(events & CUSE_POLL_READ))
@@ -181,7 +261,7 @@ static int
 evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
     void *peer_data)
 {
-	uint64_t bits[256];
+	uint64_t bits[256] = ZERO_INITIALIZER;
 	struct event_device *ed = cuse_dev_get_priv0(cdev);
 
 	switch (cmd) {
@@ -285,22 +365,34 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 		    (int)MIN(sizeof(ed->msc_bits), len));
 	}
 	case EVIOCGBIT(EV_LED, 0):
+		// printf("got ioctl EVIOCGBIT LED %lu\n", len);
+		return cuse_copy_out(ed->led_bits, peer_data,
+		    (int)MIN(sizeof(ed->led_bits), len));
 	case EVIOCGBIT(EV_SW, 0):
+		// printf("got unimplemented ioctl EVIOCGBIT EV_SW %lu\n",
+		// len);
+		return cuse_copy_out(
+		    bits, peer_data, (int)MIN(sizeof(bits), len));
 	case EVIOCGBIT(EV_FF, 0):
+		// printf("got unimplemented ioctl EVIOCGBIT EV_FF %lu\n",
+		// len);
+		return cuse_copy_out(
+		    bits, peer_data, (int)MIN(sizeof(bits), len));
 	case EVIOCGBIT(EV_SND, 0):
-		// printf("got ioctl EVIOCGBIT %lu\n", len);
-		memset(bits, 0, sizeof(bits));
+		// printf("got unimplemented ioctl EVIOCGBIT EV_SND %lu\n",
+		// len);
 		return cuse_copy_out(
 		    bits, peer_data, (int)MIN(sizeof(bits), len));
 	case EVIOCGKEY(0):
 		// TODO: implement this
-		// printf("got ioctl EVIOCGKEY %lu\n", len);
+		// fprintf(stderr, "got unimplemented EVIOCGKEY %lu\n", len);
 		return 0;
 	case EVIOCGLED(0):
-		// printf("got ioctl EVIOCGLED %lu\n", len);
+		// TODO: implement this
+		// fprintf(stderr, "got unimplemented EVIOCGLED %lu\n", len);
 		return 0;
 	case EVIOCGSW(0):
-		// printf("got ioctl EVIOCGSW %lu\n", len);
+		// fprintf(stderr, "got unimplemented EVIOCGSW %lu\n", len);
 		return 0;
 	case EVIOCGPROP(0):
 		// printf("got ioctl EVIOCGPROP %lu\n", len);
@@ -360,6 +452,7 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 static struct cuse_methods evdevfbsd_methods = {.cm_open = evdevfbsd_open,
     .cm_close = evdevfbsd_close,
     .cm_read = evdevfbsd_read,
+    .cm_write = evdevfbsd_write,
     .cm_poll = evdevfbsd_poll,
     .cm_ioctl = evdevfbsd_ioctl};
 

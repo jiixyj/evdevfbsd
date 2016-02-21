@@ -34,6 +34,8 @@ struct event_device {
 	void *(*fill_function)(struct event_device *);
 	int (*read_packet)(struct event_device *);
 	int (*parse_packet)(struct event_device *);
+	void (*handle_injected_event)(
+	    struct event_device *, struct input_event *);
 	uint16_t tracking_ids;
 	int clock;
 	int backend_type;
@@ -52,6 +54,7 @@ struct event_device {
 	uint64_t rel_bits[256];
 	uint64_t key_bits[256];
 	uint64_t abs_bits[256];
+	uint64_t led_bits[256];
 	uint64_t msc_bits[256];
 	uint64_t prop_bits[256];
 	struct input_absinfo abs_info[ABS_MAX];
@@ -59,6 +62,7 @@ struct event_device {
 	uint16_t events_since_last_syn;
 	int32_t key_state[KEY_CNT];
 	int32_t abs_state[ABS_CNT];
+	int32_t led_state[LED_CNT];
 	int32_t current_mt_slot;
 	int32_t mt_state[MAX_SLOTS][ABS_MT_LAST - ABS_MT_FIRST + 1];
 };

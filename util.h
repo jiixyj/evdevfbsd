@@ -6,6 +6,8 @@
 #include <sys/time.h>
 
 void set_bit(uint64_t *array, int bit);
+bool get_bit(uint64_t *array, int bit, int max);
+
 void set_bits_generic_ps2(struct event_device *ed);
 void put_event(struct event_device *ed, struct timeval const *tv,
     uint16_t type, uint16_t code, int32_t value);

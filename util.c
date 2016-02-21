@@ -19,6 +19,12 @@ set_bit(uint64_t *array, int bit)
 	array[bit / 64] |= ((uint64_t)1 << (bit % 64));
 }
 
+bool
+get_bit(uint64_t *array, int bit, int max)
+{
+	return bit <= max && !!(array[bit / 64] & ((uint64_t)1 << (bit % 64)));
+}
+
 void
 set_bits_generic_ps2(struct event_device *ed)
 {

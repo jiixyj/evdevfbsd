@@ -238,6 +238,41 @@ atkbd_parse_packet(struct event_device *ed)
 	return 0;
 }
 
+static void
+atkbd_handle_injected_packet(struct event_device *ed, struct input_event *ev)
+{
+	if (ev->type == EV_LED) {
+		int leds = 0;
+		if (ioctl(ed->fd, KDGETLED, &leds) == -1) {
+			perror("ioctl");
+		}
+
+		if (ev->code == LED_NUML) {
+			if (ev->value) {
+				leds |= LED_NUM;
+			} else {
+				leds &= ~LED_NUM;
+			}
+		} else if (ev->code == LED_CAPSL) {
+			if (ev->value) {
+				leds |= LED_CAP;
+			} else {
+				leds &= ~LED_CAP;
+			}
+		} else if (ev->code == LED_SCROLLL) {
+			if (ev->value) {
+				leds |= LED_SCR;
+			} else {
+				leds &= ~LED_SCR;
+			}
+		}
+
+		if (ioctl(ed->fd, KDSETLED, leds) == -1) {
+			perror("ioctl");
+		}
+	}
+}
+
 void
 atkbd_backend_cleanup(struct event_device *ed)
 {
@@ -297,8 +332,14 @@ atkbd_backend_init(struct event_device *ed)
 	set_bit(ed->event_bits, EV_MSC);
 	set_bit(ed->msc_bits, MSC_SCAN);
 
+	set_bit(ed->event_bits, EV_LED);
+	set_bit(ed->led_bits, LED_NUML);
+	set_bit(ed->led_bits, LED_CAPSL);
+	set_bit(ed->led_bits, LED_SCROLLL);
+
 	ed->read_packet = atkbd_read_packet;
 	ed->parse_packet = atkbd_parse_packet;
+	ed->handle_injected_event = atkbd_handle_injected_packet;
 	ed->backend_type = ATKBD_BACKEND;
 
 	return 1;
