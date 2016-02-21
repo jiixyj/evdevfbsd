@@ -417,6 +417,8 @@ psm_open_as_guest(struct event_device *ed, struct event_device *parent)
 		ed->device_name = "TPPS/2 IBM TrackPoint";
 		ed->iid.product = PSMOUSE_TRACKPOINT;
 		set_bits_generic_ps2(ed);
+		set_bit(ed->prop_bits, INPUT_PROP_POINTER);
+		set_bit(ed->prop_bits, INPUT_PROP_POINTING_STICK);
 		break;
 	}
 
@@ -554,6 +556,8 @@ psm_backend_init(struct event_device *ed)
 		ed->device_name = "TPPS/2 IBM TrackPoint";
 		ed->iid.product = PSMOUSE_TRACKPOINT;
 		set_bits_generic_ps2(ed);
+		set_bit(ed->prop_bits, INPUT_PROP_POINTER);
+		set_bit(ed->prop_bits, INPUT_PROP_POINTING_STICK);
 		break;
 	case MOUSE_MODEL_GENERIC:
 		ed->device_name = "Generic Mouse"; // XXX not sure
