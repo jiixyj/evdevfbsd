@@ -729,6 +729,9 @@ main(int argc, char **argv)
 
 	for (unsigned i = 0; i < nr_eds; ++i) {
 		if (eds[i].fill_function == NULL) {
+			if (eds[i].fd == -1) {
+				continue;
+			}
 			EV_SET(&evs[0], eds[i].fd, EVFILT_READ, EV_ADD, 0, 0,
 			    &eds[i]);
 			if (kevent(kq, evs, 1, NULL, 0, NULL) == -1) {

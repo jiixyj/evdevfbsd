@@ -30,6 +30,8 @@ struct uhid_backend {
 
 	char const *application_usage;
 	char const *physical_usage;
+
+	struct event_device *rid_to_ed[256];
 };
 
 static const struct {
@@ -215,17 +217,25 @@ uhid_parse_packet(struct event_device *ed)
 
 	bool use_rid = !!hid_get_report_id(ed->fd);
 
-	if (use_rid && ed->packet_buf[0] != 1) {
+	struct event_device *ev_ed = ed;
+	if (use_rid) {
+		ev_ed = b->rid_to_ed[ed->packet_buf[0]];
+	}
+
+	if (!ev_ed) {
 		return 1;
 	}
 
-	event_client_need_free_bufsize(ed, 32);
+	event_client_need_free_bufsize(ev_ed, 32);
 
 	for (size_t i = 0; i < b->hiditems_used; ++i) {
-		parse_hid_item(ed, ed->packet_time, ed->packet_buf, i);
+		if (use_rid && b->hiditems[i].report_ID != ed->packet_buf[0]) {
+			continue;
+		}
+		parse_hid_item(ev_ed, ed->packet_time, ed->packet_buf, i);
 	}
 
-	put_event(ed, &ed->packet_time, EV_SYN, SYN_REPORT, 0);
+	put_event(ev_ed, &ed->packet_time, EV_SYN, SYN_REPORT, 0);
 	return 0;
 }
 
@@ -407,50 +417,6 @@ uhid_backend_init(struct event_device *ed, char const *path)
 	b->hiditems_used = 0;
 	memset(b->hiditem_types, '\0', sizeof(b->hiditem_types));
 
-	struct hid_data *d;
-	struct hid_item h;
-
-	int collection_stack = 0;
-	b->application_usage = NULL;
-	b->physical_usage = NULL;
-
-	for (d = hid_start_parse(b->report_desc, 1 << hid_input, -1);
-	     hid_get_item(d, &h);) {
-		switch (h.kind) {
-		case hid_collection:
-			if (h.collection == 1) {
-				b->application_usage =
-				    hid_usage_in_page(h.usage);
-			} else if (h.collection == 0) {
-				b->physical_usage = hid_usage_in_page(h.usage);
-			}
-
-			++collection_stack;
-			break;
-		case hid_endcollection:
-			--collection_stack;
-			break;
-		case hid_input: {
-			int ret = parse_input_descriptor(ed, h);
-			if (ret == -1) {
-				goto fail;
-			}
-			break;
-		}
-		case hid_output:
-		case hid_feature:
-			break;
-		}
-
-		if (collection_stack == 0) {
-			break;
-		}
-	}
-	hid_end_parse(d);
-
-	b->application_usage = NULL;
-	b->physical_usage = NULL;
-
 	memset(b->desc, '\0', sizeof(b->desc));
 	size_t siz = sizeof(b->desc) - 1;
 	char sysctl_name[64] = {0};
@@ -462,11 +428,79 @@ uhid_backend_init(struct event_device *ed, char const *path)
 	}
 	ed->device_name = b->desc;
 
+	struct hid_data *d;
+	struct hid_item h;
+
+	int collection_stack = 0;
+	b->application_usage = NULL;
+	b->physical_usage = NULL;
+
+	size_t ed_index = 0;
+	bool use_rid = !!hid_get_report_id(ed->fd);
+	memset(b->rid_to_ed, '\0', sizeof(b->rid_to_ed));
+
+	for (d = hid_start_parse(b->report_desc, 1 << hid_input, -1);
+	     hid_get_item(d, &h);) {
+		switch (h.kind) {
+		case hid_collection:
+			if (h.collection == 1) {
+				b->application_usage =
+				    hid_usage_in_page(h.usage);
+
+				if (collection_stack == 0) {
+					// Each Joystick should get its own
+					// device.
+					if (!strcmp(b->application_usage,
+						"Joystick")) {
+						ed[ed_index].device_name =
+						    ed->device_name;
+						ed[ed_index].priv_ptr = b;
+					} else if (ed_index > 0) {
+						--ed_index;
+					}
+				}
+			} else if (h.collection == 0) {
+				b->physical_usage = hid_usage_in_page(h.usage);
+			}
+
+			++collection_stack;
+			break;
+		case hid_endcollection:
+			--collection_stack;
+			if (collection_stack == 0) {
+				++ed_index;
+			}
+
+			break;
+		case hid_input: {
+			if (use_rid) {
+				b->rid_to_ed[h.report_ID] = &ed[ed_index];
+			}
+			int ret = parse_input_descriptor(&ed[ed_index], h);
+			if (ret == -1) {
+				goto fail;
+			}
+			break;
+		}
+		case hid_output:
+		case hid_feature:
+			break;
+		}
+
+		if (ed_index == 8) {
+			break;
+		}
+	}
+	hid_end_parse(d);
+
+	b->application_usage = NULL;
+	b->physical_usage = NULL;
+
 	ed->read_packet = uhid_read_packet;
 	ed->parse_packet = uhid_parse_packet;
 	ed->backend_type = UHID_BACKEND;
 
-	return 1;
+	return (int) ed_index;
 fail:
 	free(ed->priv_ptr);
 	return -1;
