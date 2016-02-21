@@ -79,6 +79,10 @@ parse_hid_item(
 
 	if (!strcmp(usage_page, "Keyboard")) {
 		if (h.report_count == 1) {
+			if (ed->key_state[slot] != data) {
+				put_event(ed, &tv, EV_MSC, MSC_SCAN,
+				    (int32_t)h.usage);
+			}
 			put_event(ed, &tv, EV_KEY, slot, data);
 		} else if (h.report_count > 1) {
 			int32_t new_keys[128] = {0};
@@ -103,6 +107,11 @@ parse_hid_item(
 
 					if (!is_in_old_data &&
 					    hid_to_evdev[data]) {
+						if (ed->key_state[slot] != 1) {
+							put_event(ed, &tv,
+							    EV_MSC, MSC_SCAN,
+							    (int32_t)h.usage);
+						}
 						put_event(ed, &tv, EV_KEY,
 						    hid_to_evdev[data], 1);
 					}
@@ -125,6 +134,11 @@ parse_hid_item(
 				}
 				if (!is_in_new_data &&
 				    hid_to_evdev[old_keys[r]]) {
+					if (ed->key_state[slot] != 0) {
+						put_event(ed, &tv, EV_MSC,
+						    MSC_SCAN,
+						    (int32_t)h.usage);
+					}
 					put_event(ed, &tv, EV_KEY,
 					    hid_to_evdev[old_keys[r]], 0);
 				}
@@ -134,6 +148,9 @@ parse_hid_item(
 			}
 		}
 	} else if (!strcmp(usage_page, "Button")) {
+		if (ed->key_state[slot] != data) {
+			put_event(ed, &tv, EV_MSC, MSC_SCAN, (int32_t)h.usage);
+		}
 		put_event(ed, &tv, EV_KEY, slot, data);
 	} else if (!strcmp(usage_page, "Generic_Desktop")) {
 		if (!strcmp(usage_in_page, "X") ||
@@ -264,6 +281,8 @@ parse_input_descriptor(
 
 				set_bit(ed->event_bits, EV_KEY);
 				set_bit(ed->key_bits, slot);
+				set_bit(ed->event_bits, EV_MSC);
+				set_bit(ed->msc_bits, MSC_SCAN);
 			} else {
 				// TODO: fix reporting of unknown keys
 			}
@@ -286,6 +305,8 @@ parse_input_descriptor(
 				}
 				set_bit(ed->event_bits, EV_KEY);
 				set_bit(ed->key_bits, hid_to_evdev[i]);
+				set_bit(ed->event_bits, EV_MSC);
+				set_bit(ed->msc_bits, MSC_SCAN);
 			}
 		}
 	} else if (!strcmp(usage_page, "Button")) {
@@ -310,6 +331,8 @@ parse_input_descriptor(
 
 		set_bit(ed->event_bits, EV_KEY);
 		set_bit(ed->key_bits, slot);
+		set_bit(ed->event_bits, EV_MSC);
+		set_bit(ed->msc_bits, MSC_SCAN);
 	} else if (!strcmp(usage_page, "Generic_Desktop")) {
 		if (!strcmp(usage_in_page, "X") ||
 		    !strcmp(usage_in_page, "Y") ||
