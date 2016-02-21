@@ -406,6 +406,8 @@ uhid_backend_init(struct event_device *ed, char const *path)
 
 	struct uhid_backend *b = ed->priv_ptr;
 
+	ed->iid.bustype = BUS_USB;
+
 	ed->fd = open(path, O_RDONLY | O_NONBLOCK);
 	if (ed->fd == -1)
 		goto fail;
@@ -478,7 +480,6 @@ uhid_backend_init(struct event_device *ed, char const *path)
 				libusb20_dev_req_string_simple_sync(pdev,
 				    ddesc->iProduct, line2, sizeof(line2));
 
-				ed->iid.bustype = BUS_USB;
 				ed->iid.vendor = ddesc->idVendor;
 				ed->iid.product = ddesc->idProduct;
 				ed->iid.version = ddesc->bcdUSB;
