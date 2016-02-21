@@ -337,6 +337,19 @@ atkbd_backend_init(struct event_device *ed)
 	set_bit(ed->led_bits, LED_CAPSL);
 	set_bit(ed->led_bits, LED_SCROLLL);
 
+	set_bit(ed->event_bits, EV_REP);
+	ed->rep[REP_DELAY] = 250;
+	ed->rep[REP_PERIOD] = 34;
+	keyboard_repeat_t kr;
+	if (ioctl(ed->fd, KDGETREPEAT, &kr) == 0) {
+		if (kr.kb_repeat[0] > 0 && kr.kb_repeat[1] > 0) {
+			ed->rep[REP_DELAY] = (unsigned)kr.kb_repeat[0];
+			ed->rep[REP_PERIOD] = (unsigned)kr.kb_repeat[1];
+		}
+	} else {
+		perror("ioctl");
+	}
+
 	ed->read_packet = atkbd_read_packet;
 	ed->parse_packet = atkbd_parse_packet;
 	ed->handle_injected_event = atkbd_handle_injected_packet;

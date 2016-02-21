@@ -58,6 +58,7 @@ struct event_device {
 	uint64_t msc_bits[256];
 	uint64_t prop_bits[256];
 	struct input_absinfo abs_info[ABS_MAX];
+	unsigned int rep[2];
 
 	uint16_t events_since_last_syn;
 	int32_t key_state[KEY_CNT];

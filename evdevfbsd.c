@@ -303,6 +303,9 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 
 		return 0;
 	}
+	case EVIOCGREP: {
+		return cuse_copy_out(&ed->rep, peer_data, sizeof(ed->rep));
+	}
 	case EVIOCSCLOCKID: {
 		int new_clock, ret;
 		if ((ret = cuse_copy_in(
