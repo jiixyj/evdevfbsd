@@ -11,10 +11,34 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include "linux/mouse/psmouse.h"
 #include "util.h"
 
 #include <stdint.h>
+
+/* from linux: drivers/input/mouse/psmouse.h */
+enum psmouse_type {
+	PSMOUSE_NONE,
+	PSMOUSE_PS2,
+	PSMOUSE_PS2PP,
+	PSMOUSE_THINKPS,
+	PSMOUSE_GENPS,
+	PSMOUSE_IMPS,
+	PSMOUSE_IMEX,
+	PSMOUSE_SYNAPTICS,
+	PSMOUSE_ALPS,
+	PSMOUSE_LIFEBOOK,
+	PSMOUSE_TRACKPOINT,
+	PSMOUSE_TOUCHKIT_PS2,
+	PSMOUSE_CORTRON,
+	PSMOUSE_HGPK,
+	PSMOUSE_ELANTECH,
+	PSMOUSE_FSP,
+	PSMOUSE_SYNAPTICS_RELATIVE,
+	PSMOUSE_CYPRESS,
+	PSMOUSE_FOCALTECH,
+	PSMOUSE_VMMOUSE,
+	PSMOUSE_AUTO
+};
 
 struct synaptics_ew_state {
 	int32_t x;

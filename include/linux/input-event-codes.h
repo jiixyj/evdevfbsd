@@ -16,73 +16,15 @@
  ***
  ****************************************************************************
  ****************************************************************************/
-#ifndef _UAPI_INPUT_H
-#define _UAPI_INPUT_H
-#include <sys/time.h>
-#include <sys/ioctl.h>
-#include <sys/types.h>
-#include <linux/types.h>
-struct input_event {
- struct timeval time;
- __u16 type;
- __u16 code;
- __s32 value;
-};
-#define EV_VERSION 0x010001
-struct input_id {
- __u16 bustype;
- __u16 vendor;
- __u16 product;
- __u16 version;
-};
-struct input_absinfo {
- __s32 value;
- __s32 minimum;
- __s32 maximum;
- __s32 fuzz;
- __s32 flat;
- __s32 resolution;
-};
-struct input_keymap_entry {
-#define INPUT_KEYMAP_BY_INDEX (1 << 0)
- __u8 flags;
- __u8 len;
- __u16 index;
- __u32 keycode;
- __u8 scancode[32];
-};
-#define EVIOCGVERSION _IOR('E', 0x01, int)
-#define EVIOCGID _IOR('E', 0x02, struct input_id)
-#define EVIOCGREP _IOR('E', 0x03, unsigned int[2])
-#define EVIOCSREP _IOW('E', 0x03, unsigned int[2])
-#define EVIOCGKEYCODE _IOR('E', 0x04, unsigned int[2])
-#define EVIOCGKEYCODE_V2 _IOR('E', 0x04, struct input_keymap_entry)
-#define EVIOCSKEYCODE _IOW('E', 0x04, unsigned int[2])
-#define EVIOCSKEYCODE_V2 _IOW('E', 0x04, struct input_keymap_entry)
-#define EVIOCGNAME(len) _IOC(_IOC_READ, 'E', 0x06, len)
-#define EVIOCGPHYS(len) _IOC(_IOC_READ, 'E', 0x07, len)
-#define EVIOCGUNIQ(len) _IOC(_IOC_READ, 'E', 0x08, len)
-#define EVIOCGPROP(len) _IOC(_IOC_READ, 'E', 0x09, len)
-#define EVIOCGMTSLOTS(len) _IOC(_IOC_READ, 'E', 0x0a, len)
-#define EVIOCGKEY(len) _IOC(_IOC_READ, 'E', 0x18, len)
-#define EVIOCGLED(len) _IOC(_IOC_READ, 'E', 0x19, len)
-#define EVIOCGSND(len) _IOC(_IOC_READ, 'E', 0x1a, len)
-#define EVIOCGSW(len) _IOC(_IOC_READ, 'E', 0x1b, len)
-#define EVIOCGBIT(ev,len) _IOC(_IOC_READ, 'E', 0x20 + (ev), len)
-#define EVIOCGABS(abs) _IOR('E', 0x40 + (abs), struct input_absinfo)
-#define EVIOCSABS(abs) _IOW('E', 0xc0 + (abs), struct input_absinfo)
-#define EVIOCSFF _IOC(_IOC_WRITE, 'E', 0x80, sizeof(struct ff_effect))
-#define EVIOCRMFF _IOW('E', 0x81, int)
-#define EVIOCGEFFECTS _IOR('E', 0x84, int)
-#define EVIOCGRAB _IOW('E', 0x90, int)
-#define EVIOCREVOKE _IOW('E', 0x91, int)
-#define EVIOCSCLOCKID _IOW('E', 0xa0, int)
+#ifndef _UAPI_INPUT_EVENT_CODES_H
+#define _UAPI_INPUT_EVENT_CODES_H
 #define INPUT_PROP_POINTER 0x00
 #define INPUT_PROP_DIRECT 0x01
 #define INPUT_PROP_BUTTONPAD 0x02
 #define INPUT_PROP_SEMI_MT 0x03
 #define INPUT_PROP_TOPBUTTONPAD 0x04
 #define INPUT_PROP_POINTING_STICK 0x05
+#define INPUT_PROP_ACCELEROMETER 0x06
 #define INPUT_PROP_MAX 0x1f
 #define INPUT_PROP_CNT (INPUT_PROP_MAX + 1)
 #define EV_SYN 0x00
@@ -98,13 +40,13 @@ struct input_keymap_entry {
 #define EV_PWR 0x16
 #define EV_FF_STATUS 0x17
 #define EV_MAX 0x1f
-#define EV_CNT (EV_MAX+1)
+#define EV_CNT (EV_MAX + 1)
 #define SYN_REPORT 0
 #define SYN_CONFIG 1
 #define SYN_MT_REPORT 2
 #define SYN_DROPPED 3
 #define SYN_MAX 0xf
-#define SYN_CNT (SYN_MAX+1)
+#define SYN_CNT (SYN_MAX + 1)
 #define KEY_RESERVED 0
 #define KEY_ESC 1
 #define KEY_1 2
@@ -259,7 +201,8 @@ struct input_keymap_entry {
 #define KEY_MSDOS 151
 #define KEY_COFFEE 152
 #define KEY_SCREENLOCK KEY_COFFEE
-#define KEY_DIRECTION 153
+#define KEY_ROTATE_DISPLAY 153
+#define KEY_DIRECTION KEY_ROTATE_DISPLAY
 #define KEY_CYCLEWINDOWS 154
 #define KEY_MAIL 155
 #define KEY_BOOKMARKS 156
@@ -564,6 +507,10 @@ struct input_keymap_entry {
 #define KEY_NUMERIC_9 0x209
 #define KEY_NUMERIC_STAR 0x20a
 #define KEY_NUMERIC_POUND 0x20b
+#define KEY_NUMERIC_A 0x20c
+#define KEY_NUMERIC_B 0x20d
+#define KEY_NUMERIC_C 0x20e
+#define KEY_NUMERIC_D 0x20f
 #define KEY_CAMERA_FOCUS 0x210
 #define KEY_WPS_BUTTON 0x211
 #define KEY_TOUCHPAD_TOGGLE 0x212
@@ -642,7 +589,7 @@ struct input_keymap_entry {
 #define BTN_TRIGGER_HAPPY40 0x2e7
 #define KEY_MIN_INTERESTING KEY_MUTE
 #define KEY_MAX 0x2ff
-#define KEY_CNT (KEY_MAX+1)
+#define KEY_CNT (KEY_MAX + 1)
 #define REL_X 0x00
 #define REL_Y 0x01
 #define REL_Z 0x02
@@ -654,7 +601,7 @@ struct input_keymap_entry {
 #define REL_WHEEL 0x08
 #define REL_MISC 0x09
 #define REL_MAX 0x0f
-#define REL_CNT (REL_MAX+1)
+#define REL_CNT (REL_MAX + 1)
 #define ABS_X 0x00
 #define ABS_Y 0x01
 #define ABS_Z 0x02
@@ -697,7 +644,7 @@ struct input_keymap_entry {
 #define ABS_MT_TOOL_X 0x3c
 #define ABS_MT_TOOL_Y 0x3d
 #define ABS_MAX 0x3f
-#define ABS_CNT (ABS_MAX+1)
+#define ABS_CNT (ABS_MAX + 1)
 #define SW_LID 0x00
 #define SW_TABLET_MODE 0x01
 #define SW_HEADPHONE_INSERT 0x02
@@ -715,7 +662,7 @@ struct input_keymap_entry {
 #define SW_LINEIN_INSERT 0x0d
 #define SW_MUTE_DEVICE 0x0e
 #define SW_MAX 0x0f
-#define SW_CNT (SW_MAX+1)
+#define SW_CNT (SW_MAX + 1)
 #define MSC_SERIAL 0x00
 #define MSC_PULSELED 0x01
 #define MSC_GESTURE 0x02
@@ -723,7 +670,7 @@ struct input_keymap_entry {
 #define MSC_SCAN 0x04
 #define MSC_TIMESTAMP 0x05
 #define MSC_MAX 0x07
-#define MSC_CNT (MSC_MAX+1)
+#define MSC_CNT (MSC_MAX + 1)
 #define LED_NUML 0x00
 #define LED_CAPSL 0x01
 #define LED_SCROLLL 0x02
@@ -736,125 +683,14 @@ struct input_keymap_entry {
 #define LED_MAIL 0x09
 #define LED_CHARGING 0x0a
 #define LED_MAX 0x0f
-#define LED_CNT (LED_MAX+1)
+#define LED_CNT (LED_MAX + 1)
 #define REP_DELAY 0x00
 #define REP_PERIOD 0x01
 #define REP_MAX 0x01
-#define REP_CNT (REP_MAX+1)
+#define REP_CNT (REP_MAX + 1)
 #define SND_CLICK 0x00
 #define SND_BELL 0x01
 #define SND_TONE 0x02
 #define SND_MAX 0x07
-#define SND_CNT (SND_MAX+1)
-#define ID_BUS 0
-#define ID_VENDOR 1
-#define ID_PRODUCT 2
-#define ID_VERSION 3
-#define BUS_PCI 0x01
-#define BUS_ISAPNP 0x02
-#define BUS_USB 0x03
-#define BUS_HIL 0x04
-#define BUS_BLUETOOTH 0x05
-#define BUS_VIRTUAL 0x06
-#define BUS_ISA 0x10
-#define BUS_I8042 0x11
-#define BUS_XTKBD 0x12
-#define BUS_RS232 0x13
-#define BUS_GAMEPORT 0x14
-#define BUS_PARPORT 0x15
-#define BUS_AMIGA 0x16
-#define BUS_ADB 0x17
-#define BUS_I2C 0x18
-#define BUS_HOST 0x19
-#define BUS_GSC 0x1A
-#define BUS_ATARI 0x1B
-#define BUS_SPI 0x1C
-#define MT_TOOL_FINGER 0
-#define MT_TOOL_PEN 1
-#define MT_TOOL_MAX 1
-#define FF_STATUS_STOPPED 0x00
-#define FF_STATUS_PLAYING 0x01
-#define FF_STATUS_MAX 0x01
-struct ff_replay {
- __u16 length;
- __u16 delay;
-};
-struct ff_trigger {
- __u16 button;
- __u16 interval;
-};
-struct ff_envelope {
- __u16 attack_length;
- __u16 attack_level;
- __u16 fade_length;
- __u16 fade_level;
-};
-struct ff_constant_effect {
- __s16 level;
- struct ff_envelope envelope;
-};
-struct ff_ramp_effect {
- __s16 start_level;
- __s16 end_level;
- struct ff_envelope envelope;
-};
-struct ff_condition_effect {
- __u16 right_saturation;
- __u16 left_saturation;
- __s16 right_coeff;
- __s16 left_coeff;
- __u16 deadband;
- __s16 center;
-};
-struct ff_periodic_effect {
- __u16 waveform;
- __u16 period;
- __s16 magnitude;
- __s16 offset;
- __u16 phase;
- struct ff_envelope envelope;
- __u32 custom_len;
- __s16 __user *custom_data;
-};
-struct ff_rumble_effect {
- __u16 strong_magnitude;
- __u16 weak_magnitude;
-};
-struct ff_effect {
- __u16 type;
- __s16 id;
- __u16 direction;
- struct ff_trigger trigger;
- struct ff_replay replay;
- union {
- struct ff_constant_effect constant;
- struct ff_ramp_effect ramp;
- struct ff_periodic_effect periodic;
- struct ff_condition_effect condition[2];
- struct ff_rumble_effect rumble;
- } u;
-};
-#define FF_RUMBLE 0x50
-#define FF_PERIODIC 0x51
-#define FF_CONSTANT 0x52
-#define FF_SPRING 0x53
-#define FF_FRICTION 0x54
-#define FF_DAMPER 0x55
-#define FF_INERTIA 0x56
-#define FF_RAMP 0x57
-#define FF_EFFECT_MIN FF_RUMBLE
-#define FF_EFFECT_MAX FF_RAMP
-#define FF_SQUARE 0x58
-#define FF_TRIANGLE 0x59
-#define FF_SINE 0x5a
-#define FF_SAW_UP 0x5b
-#define FF_SAW_DOWN 0x5c
-#define FF_CUSTOM 0x5d
-#define FF_WAVEFORM_MIN FF_SQUARE
-#define FF_WAVEFORM_MAX FF_CUSTOM
-#define FF_GAIN 0x60
-#define FF_AUTOCENTER 0x61
-#define FF_MAX 0x7f
-#define FF_CNT (FF_MAX+1)
+#define SND_CNT (SND_MAX + 1)
 #endif
-
