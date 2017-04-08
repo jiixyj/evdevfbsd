@@ -2,6 +2,7 @@
 
 #include <sys/capsicum.h>
 #include <sys/event.h>
+#include <sys/filio.h>
 #include <sys/param.h>
 #include <sys/types.h>
 #include <sys/wait.h>

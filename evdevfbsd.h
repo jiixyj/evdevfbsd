@@ -8,7 +8,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 
-#include "linux/input.h"
+#include <dev/evdev/input.h>
 
 #define EVENT_BUFFER_SIZE 1024
 #define MAX_SLOTS 16

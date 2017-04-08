@@ -8,6 +8,6 @@ SRCS=	evdevfbsd.c \
 MAN=
 
 LDADD=		-lcuse -lusbhid -lusb
-CFLAGS+=	-Wall -Wextra -Weverything -Wno-padded -isystem include -pthread
+CFLAGS+=	-Wall -Wextra -Weverything -Wno-padded -pthread
 
 .include <bsd.prog.mk>
