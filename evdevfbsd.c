@@ -283,27 +283,6 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 		int version = EV_VERSION;
 		return cuse_copy_out(&version, peer_data, sizeof(version));
 	}
-	case EVIOCGRAB: {
-		// printf("GRAB: %p\n", peer_data);
-		struct event_client_state *client_state =
-		    cuse_dev_get_per_file_handle(cdev);
-
-		if (peer_data) {
-			if (ed->exclusive_client != NULL) {
-				return CUSE_ERR_BUSY;
-			} else {
-				ed->exclusive_client = client_state;
-			}
-		} else {
-			if (ed->exclusive_client != client_state) {
-				return CUSE_ERR_INVALID;
-			} else {
-				ed->exclusive_client = NULL;
-			}
-		}
-
-		return 0;
-	}
 	case EVIOCGREP: {
 		return cuse_copy_out(&ed->rep, peer_data, sizeof(ed->rep));
 	}
@@ -326,6 +305,27 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 	unsigned long len = IOCPARM_LEN(cmd);
 
 	switch (base_cmd) {
+	case IOCBASECMD(EVIOCGRAB): {
+		// fprintf(stderr, "GRAB: %p\n", peer_data);
+		struct event_client_state *client_state =
+		    cuse_dev_get_per_file_handle(cdev);
+
+		if (peer_data) {
+			if (ed->exclusive_client != NULL) {
+				return CUSE_ERR_BUSY;
+			} else {
+				ed->exclusive_client = client_state;
+			}
+		} else {
+			if (ed->exclusive_client != client_state) {
+				return CUSE_ERR_INVALID;
+			} else {
+				ed->exclusive_client = NULL;
+			}
+		}
+
+		return 0;
+	}
 	case EVIOCGBIT(0, 0): {
 		// printf("got ioctl EVIOCGBIT %lu\n", len);
 		return cuse_copy_out(ed->event_bits, peer_data,
@@ -441,11 +441,11 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 	fprintf(stderr, "got unknown ioctl %lu %lu %lu\n", cmd, base_cmd, len);
 	unsigned long direction = cmd & IOC_DIRMASK;
 	if (direction == IOC_VOID) {
-		fprintf(stderr, "direction: void");
+		fprintf(stderr, "direction: void\n");
 	} else if (direction == IOC_OUT) {
-		fprintf(stderr, "direction: out");
+		fprintf(stderr, "direction: out\n");
 	} else if (direction == IOC_IN) {
-		fprintf(stderr, "direction: in");
+		fprintf(stderr, "direction: in\n");
 	}
 	fprintf(stderr, "length: %lu\n", IOCPARM_LEN(cmd));
 	fprintf(stderr, "group: %c\n", (unsigned char)IOCGROUP(cmd));
