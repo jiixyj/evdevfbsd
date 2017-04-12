@@ -43,6 +43,8 @@ event_client_new()
 		return NULL;
 	}
 
+	ret->clock = CLOCK_REALTIME;
+
 	return ret;
 }
 
@@ -139,14 +141,26 @@ retry:
 	} else {
 		nr_events =
 		    MIN(requested_events, client_state->event_buffer_end);
+		for (int i = 0; i < nr_events; ++i) {
+			client_state->event_buffer[i].time =
+			    client_state->clock == CLOCK_REALTIME ?
+			    client_state->event_times[i].real_time :
+			    client_state->event_times[i].monotonic_time;
+		}
 		ret = cuse_copy_out(client_state->event_buffer, user_ptr,
 		    nr_events * (int)sizeof(struct input_event));
 		if (ret == 0) {
 			memmove(client_state->event_buffer,
 			    &client_state->event_buffer[nr_events],
 			    (size_t)(
-				client_state->event_buffer_end - nr_events) *
-				sizeof(struct input_event));
+			        client_state->event_buffer_end - nr_events) *
+			        sizeof(struct input_event));
+			memmove(client_state->event_times,
+			    &client_state->event_times[nr_events],
+			    (size_t)(
+			        client_state->event_buffer_end - nr_events) *
+			        sizeof(struct event_plus_times));
+
 			client_state->event_buffer_end =
 			    client_state->event_buffer_end - nr_events;
 			for (int i = 0; i < nr_events - 1; ++i)
@@ -172,8 +186,8 @@ evdevfbsd_write(
 
 	struct event_device *ed = cuse_dev_get_priv0(cdev);
 
-	struct timeval tv;
-	get_clock_value(ed, &tv);
+	struct event_plus_times tv;
+	get_clock_values(&tv);
 
 	struct event_client_state *client_state =
 	    cuse_dev_get_per_file_handle(cdev);
@@ -287,13 +301,16 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 		return cuse_copy_out(&ed->rep, peer_data, sizeof(ed->rep));
 	}
 	case EVIOCSCLOCKID: {
+		struct event_client_state *client_state =
+		    cuse_dev_get_per_file_handle(cdev);
+
 		int new_clock, ret;
 		if ((ret = cuse_copy_in(
 			 peer_data, &new_clock, sizeof(new_clock))))
 			return ret;
 		if (new_clock == CLOCK_REALTIME ||
 		    new_clock == CLOCK_MONOTONIC) {
-			ed->clock = new_clock;
+			client_state->clock = new_clock;
 			return 0;
 		} else {
 			return CUSE_ERR_INVALID;
@@ -488,7 +505,6 @@ event_device_init(struct event_device *ed)
 {
 	memset(ed, 0, sizeof(*ed));
 	ed->fd = -1;
-	ed->clock = CLOCK_REALTIME;
 	ed->cuse_device = NULL;
 	ed->current_mt_slot = -1;
 	for (int i = 0; i < MAX_SLOTS; ++i) {
@@ -597,8 +613,8 @@ handle_new_input(struct event_device *ed)
 	if (ret == -1) {
 		return -1;
 	} else if (ret == 0) {
-		struct timeval tv;
-		get_clock_value(ed, &tv);
+		struct event_plus_times tv;
+		get_clock_values(&tv);
 		ed->packet_time = tv;
 		pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
 		ret = ed->parse_packet(ed);

@@ -225,7 +225,7 @@ synaptic_parse_packet(
     struct event_device *ed, unsigned char packet[PSM_PACKET_MAX_SIZE])
 {
 	struct psm_backend *b = ed->priv_ptr;
-	struct timeval const *tv = &ed->packet_time;
+	struct event_plus_times const *tv = &ed->packet_time;
 	int buttons = 0;
 
 	event_client_need_free_bufsize(ed, 24);

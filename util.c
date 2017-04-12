@@ -50,8 +50,8 @@ compare_times(struct timeval tv1, struct timeval tv2)
 }
 
 void
-put_event(struct event_device *ed, struct timeval const *tv, uint16_t type,
-    uint16_t code, int32_t value)
+put_event(struct event_device *ed, struct event_plus_times const *tv,
+    uint16_t type, uint16_t code, int32_t value)
 {
 	if (type == EV_KEY) {
 		if (ed->key_state[code] == value && value < 2)
@@ -97,7 +97,6 @@ put_event(struct event_device *ed, struct timeval const *tv, uint16_t type,
 	// }
 
 	for (unsigned i = 0; i < nitems(ed->event_clients); ++i) {
-		struct input_event *buf;
 		struct event_client_state *client_state = ed->event_clients[i];
 		if (!client_state ||
 		    (ed->exclusive_client &&
@@ -113,12 +112,19 @@ put_event(struct event_device *ed, struct timeval const *tv, uint16_t type,
 		    needed_buffer)
 			continue;
 
+		struct input_event *buf;
 		buf = &client_state
-			   ->event_buffer[client_state->event_buffer_end];
-		buf->time = *tv;
+		           ->event_buffer[client_state->event_buffer_end];
 		buf->type = type;
 		buf->code = code;
 		buf->value = value;
+
+		struct event_plus_times *buf_times;
+		buf_times =
+		    &client_state->event_times[client_state->event_buffer_end];
+		buf_times->monotonic_time = tv->monotonic_time;
+		buf_times->real_time = tv->real_time;
+
 		++client_state->event_buffer_end;
 		--client_state->free_buffer_needed;
 		sem_post(&client_state->event_buffer_sem);
@@ -162,12 +168,12 @@ put_event(struct event_device *ed, struct timeval const *tv, uint16_t type,
 			mi.u.event.id = (1 << 0);
 			mi.u.event.value = value;
 			if (value) {
-				if (compare_times(*tv, last_left)) {
+				if (compare_times(tv->monotonic_time, last_left)) {
 					left_times += 1;
 				} else {
 					left_times = 1;
 				}
-				last_left = *tv;
+				last_left = tv->monotonic_time;
 				mi.u.event.value = left_times;
 			}
 		}
@@ -198,7 +204,8 @@ put_event(struct event_device *ed, struct timeval const *tv, uint16_t type,
 }
 
 void
-enable_mt_slot(struct event_device *ed, struct timeval const *tv, int32_t slot)
+enable_mt_slot(
+    struct event_device *ed, struct event_plus_times const *tv, int32_t slot)
 {
 	put_event(ed, tv, EV_ABS, ABS_MT_SLOT, slot);
 	if (ed->mt_state[slot][ABS_MT_TRACKING_ID - ABS_MT_FIRST] == -1) {
@@ -213,7 +220,7 @@ enable_mt_slot(struct event_device *ed, struct timeval const *tv, int32_t slot)
 
 void
 disable_mt_slot(
-    struct event_device *ed, struct timeval const *tv, int32_t slot)
+    struct event_device *ed, struct event_plus_times const *tv, int32_t slot)
 {
 	if (ed->mt_state[slot][ABS_MT_TRACKING_ID - ABS_MT_FIRST] >= 0) {
 		put_event(ed, tv, EV_ABS, ABS_MT_SLOT, slot);
@@ -222,13 +229,17 @@ disable_mt_slot(
 }
 
 void
-get_clock_value(struct event_device *ed, struct timeval *tv)
+get_clock_values(struct event_plus_times *ev)
 {
-	struct timespec ts;
-	clock_gettime(ed->clock, &ts); // XXX
+	struct timespec mono_ts;
+	clock_gettime(CLOCK_MONOTONIC, &mono_ts); // XXX
+	struct timespec real_ts;
+	clock_gettime(CLOCK_REALTIME, &real_ts); // XXX
 	struct bintime bt;
-	timespec2bintime(&ts, &bt);
-	bintime2timeval(&bt, tv);
+	timespec2bintime(&mono_ts, &bt);
+	bintime2timeval(&bt, &ev->monotonic_time);
+	timespec2bintime(&real_ts, &bt);
+	bintime2timeval(&bt, &ev->real_time);
 }
 
 void
