@@ -28,6 +28,8 @@
 #include "backend-sysmouse.h"
 #include "backend-uhid.h"
 
+#include "input-detection.h"
+
 static atomic_int is_exiting = 0;
 
 static struct event_client_state *
@@ -576,7 +578,7 @@ event_device_cleanup(struct event_device *ed)
 }
 
 static int
-create_cuse_device(struct event_device *ed)
+create_cuse_device(struct event_device *ed, int permissions)
 {
 	for (int i = 0; i < 32; ++i) {
 		if (snprintf(ed->cuse_dev_name, sizeof(ed->cuse_dev_name),
@@ -585,7 +587,7 @@ create_cuse_device(struct event_device *ed)
 		}
 
 		ed->cuse_device = cuse_dev_create(&evdevfbsd_methods, ed, NULL,
-		    0, 0, 0666, ed->cuse_dev_name);
+		    0, 0, permissions, ed->cuse_dev_name);
 		if (ed->cuse_device) {
 			break;
 		}
@@ -736,8 +738,32 @@ main(int argc, char **argv)
 	}
 
 	for (unsigned i = 0; i < nr_eds; ++i) {
-		if (create_cuse_device(&eds[i]))
+		struct input_id_input input;
+		struct input_id_output output;
+
+		memcpy(&input.bitmask_ev, &eds[i].event_bits,
+		    sizeof(input.bitmask_ev));
+		memcpy(&input.bitmask_abs, &eds[i].abs_bits,
+		    sizeof(input.bitmask_abs));
+		memcpy(&input.bitmask_key, &eds[i].key_bits,
+		    sizeof(input.bitmask_key));
+		memcpy(&input.bitmask_rel, &eds[i].rel_bits,
+		    sizeof(input.bitmask_rel));
+		memcpy(&input.bitmask_props, &eds[i].prop_bits,
+		    sizeof(input.bitmask_props));
+		memcpy(&input.xabsinfo, &eds[i].abs_info[ABS_X],
+		    sizeof(input.xabsinfo));
+		memcpy(&input.yabsinfo, &eds[i].abs_info[ABS_Y],
+		    sizeof(input.yabsinfo));
+
+		input_id(&input, &output);
+
+		if (create_cuse_device(
+		        &eds[i], output.ids[ID_INPUT_JOYSTICK] ? 0666 : 0600))
 			errx(1, "failed to create event device");
+
+		fprintf(stderr, "%s: ", eds[i].cuse_dev_name);
+		print_output(stderr, &output);
 	}
 
 	for (unsigned i = 0; i < nr_eds; ++i) {
