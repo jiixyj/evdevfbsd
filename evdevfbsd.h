@@ -30,6 +30,7 @@ struct event_client_state {
 	int free_buffer_needed;
 	sem_t event_buffer_sem;
 	int clock;
+	bool revoked;
 };
 
 struct event_device {

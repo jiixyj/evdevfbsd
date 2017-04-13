@@ -44,6 +44,7 @@ event_client_new()
 	}
 
 	ret->clock = CLOCK_REALTIME;
+	ret->revoked = false;
 
 	return ret;
 }
@@ -113,14 +114,20 @@ evdevfbsd_read(struct cuse_dev *cdev, int fflags, void *user_ptr, int len)
 	if (len < (int)sizeof(struct input_event))
 		return CUSE_ERR_INVALID;
 
+	struct event_client_state *client_state =
+	    cuse_dev_get_per_file_handle(cdev);
+
+#ifdef CUSE_ERR_NO_DEVICE
+	if (client_state->revoked) {
+		return CUSE_ERR_NO_DEVICE;
+	}
+#endif
+
 	int requested_events = len / (int)sizeof(struct input_event);
 	int nr_events = 0;
 
 	struct event_device *ed = cuse_dev_get_priv0(cdev);
 	int ret;
-
-	struct event_client_state *client_state =
-	    cuse_dev_get_per_file_handle(cdev);
 
 retry:
 	if (!(fflags & CUSE_FFLAG_NONBLOCK)) {
@@ -182,15 +189,21 @@ evdevfbsd_write(
 	if (len < (int)sizeof(struct input_event))
 		return CUSE_ERR_INVALID;
 
+	struct event_client_state *client_state =
+	    cuse_dev_get_per_file_handle(cdev);
+
+#ifdef CUSE_ERR_NO_DEVICE
+	if (client_state->revoked) {
+		return CUSE_ERR_NO_DEVICE;
+	}
+#endif
+
 	int requested_events = len / (int)sizeof(struct input_event);
 
 	struct event_device *ed = cuse_dev_get_priv0(cdev);
 
 	struct event_plus_times tv;
 	get_clock_values(&tv);
-
-	struct event_client_state *client_state =
-	    cuse_dev_get_per_file_handle(cdev);
 
 	// always succeed
 	int retval = requested_events * (int)sizeof(struct input_event);
@@ -258,11 +271,15 @@ evdevfbsd_poll(struct cuse_dev *cdev, int fflags __unused, int events)
 	if (!(events & CUSE_POLL_READ))
 		return CUSE_POLL_NONE;
 
-	int ret = CUSE_POLL_NONE;
-	struct event_device *ed = cuse_dev_get_priv0(cdev);
-
 	struct event_client_state *client_state =
 	    cuse_dev_get_per_file_handle(cdev);
+
+	if (client_state->revoked) {
+		return CUSE_POLL_ERROR;
+	}
+
+	int ret = CUSE_POLL_NONE;
+	struct event_device *ed = cuse_dev_get_priv0(cdev);
 
 	pthread_mutex_lock(&ed->event_buffer_mutex); // XXX
 	if (client_state->event_buffer_end > 0)
@@ -278,6 +295,14 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 {
 	uint64_t bits[256] = ZERO_INITIALIZER;
 	struct event_device *ed = cuse_dev_get_priv0(cdev);
+	struct event_client_state *client_state =
+	    cuse_dev_get_per_file_handle(cdev);
+
+#ifdef CUSE_ERR_NO_DEVICE
+	if (client_state->revoked) {
+		return CUSE_ERR_NO_DEVICE;
+	}
+#endif
 
 	switch (cmd) {
 	case TIOCFLUSH:
@@ -299,9 +324,6 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 	}
 	case EVIOCGRAB: {
 		// fprintf(stderr, "GRAB: %lx %p\n", cmd, peer_data);
-		struct event_client_state *client_state =
-		    cuse_dev_get_per_file_handle(cdev);
-
 		if (peer_data) {
 			if (ed->exclusive_client != NULL) {
 				return CUSE_ERR_BUSY;
@@ -318,13 +340,24 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 
 		return 0;
 	}
+	case EVIOCREVOKE: {
+#ifdef CUSE_ERR_NO_DEVICE
+		// fprintf(stderr, "REVOKE: %lx %p\n", cmd, peer_data);
+		if (peer_data) {
+			return CUSE_ERR_INVALID;
+		} else {
+			client_state->revoked = true;
+		}
+
+		return 0;
+#else
+		return CUSE_ERR_INVALID;
+#endif
+	}
 	case EVIOCGREP: {
 		return cuse_copy_out(&ed->rep, peer_data, sizeof(ed->rep));
 	}
 	case EVIOCSCLOCKID: {
-		struct event_client_state *client_state =
-		    cuse_dev_get_per_file_handle(cdev);
-
 		int new_clock, ret;
 		if ((ret = cuse_copy_in(
 			 peer_data, &new_clock, sizeof(new_clock))))
