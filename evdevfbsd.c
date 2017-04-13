@@ -298,7 +298,7 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 		return cuse_copy_out(&version, peer_data, sizeof(version));
 	}
 	case EVIOCGRAB: {
-		fprintf(stderr, "GRAB: %lx %p\n", cmd, peer_data);
+		// fprintf(stderr, "GRAB: %lx %p\n", cmd, peer_data);
 		struct event_client_state *client_state =
 		    cuse_dev_get_per_file_handle(cdev);
 
