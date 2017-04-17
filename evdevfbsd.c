@@ -168,7 +168,7 @@ retry:
 			    &client_state->event_times[nr_events],
 			    (size_t)(
 			        client_state->event_buffer_end - nr_events) *
-			        sizeof(struct event_plus_times));
+			        sizeof(struct event_times));
 
 			client_state->event_buffer_end =
 			    client_state->event_buffer_end - nr_events;
@@ -204,7 +204,7 @@ evdevfbsd_write(
 
 	struct event_device *ed = cuse_dev_get_priv0(cdev);
 
-	struct event_plus_times tv;
+	struct event_times tv;
 	get_clock_values(&tv);
 
 	// always succeed
@@ -648,7 +648,7 @@ handle_new_input(struct event_device *ed)
 	if (ret == -1) {
 		return -1;
 	} else if (ret == 0) {
-		struct event_plus_times tv;
+		struct event_times tv;
 		get_clock_values(&tv);
 		ed->packet_time = tv;
 		pthread_mutex_lock(&ed->event_buffer_mutex); // XXX

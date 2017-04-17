@@ -64,7 +64,7 @@ static const unsigned char hid_to_evdev[256] = {0, 0, 0, 0, 30, 48, 46, 32, 18,
 #undef KU
 
 static void
-parse_hid_item(struct event_device *ed, struct event_plus_times tv,
+parse_hid_item(struct event_device *ed, struct event_times tv,
     uint8_t *dbuf, size_t i)
 {
 	struct uhid_backend *b = ed->priv_ptr;

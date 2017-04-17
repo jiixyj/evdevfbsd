@@ -18,14 +18,14 @@
 
 enum backends { PSM_BACKEND, SYSMOUSE_BACKEND, ATKBD_BACKEND, UHID_BACKEND };
 
-struct event_plus_times {
+struct event_times {
 	struct timeval monotonic_time;
 	struct timeval real_time;
 };
 
 struct event_client_state {
 	struct input_event event_buffer[EVENT_BUFFER_SIZE];
-	struct event_plus_times event_times[EVENT_BUFFER_SIZE];
+	struct event_times event_times[EVENT_BUFFER_SIZE];
 	int event_buffer_end; /* index at which to write next event */
 	int free_buffer_needed;
 	sem_t event_buffer_sem;
@@ -51,7 +51,7 @@ struct event_device {
 	int do_poll;
 	uint8_t packet_buf[1024];
 	size_t packet_pos;
-	struct event_plus_times packet_time;
+	struct event_times packet_time;
 	void *priv_ptr;
 
 	struct input_id iid;

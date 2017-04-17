@@ -35,7 +35,7 @@ sysmouse_fill_function(struct event_device *ed)
 
 	while (read(b->fd, packet, (size_t)b->mode.packetsize) ==
 	    b->mode.packetsize) {
-		struct event_plus_times tv;
+		struct event_times tv;
 		get_clock_values(&tv);
 
 		pthread_mutex_lock(&ed->event_buffer_mutex); // XXX

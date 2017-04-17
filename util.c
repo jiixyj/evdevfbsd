@@ -50,7 +50,7 @@ compare_times(struct timeval tv1, struct timeval tv2)
 }
 
 void
-put_event(struct event_device *ed, struct event_plus_times const *tv,
+put_event(struct event_device *ed, struct event_times const *tv,
     uint16_t type, uint16_t code, int32_t value)
 {
 	if (type == EV_KEY) {
@@ -119,7 +119,7 @@ put_event(struct event_device *ed, struct event_plus_times const *tv,
 		buf->code = code;
 		buf->value = value;
 
-		struct event_plus_times *buf_times;
+		struct event_times *buf_times;
 		buf_times =
 		    &client_state->event_times[client_state->event_buffer_end];
 		buf_times->monotonic_time = tv->monotonic_time;
@@ -205,7 +205,7 @@ put_event(struct event_device *ed, struct event_plus_times const *tv,
 
 void
 enable_mt_slot(
-    struct event_device *ed, struct event_plus_times const *tv, int32_t slot)
+    struct event_device *ed, struct event_times const *tv, int32_t slot)
 {
 	put_event(ed, tv, EV_ABS, ABS_MT_SLOT, slot);
 	if (ed->mt_state[slot][ABS_MT_TRACKING_ID - ABS_MT_FIRST] == -1) {
@@ -220,7 +220,7 @@ enable_mt_slot(
 
 void
 disable_mt_slot(
-    struct event_device *ed, struct event_plus_times const *tv, int32_t slot)
+    struct event_device *ed, struct event_times const *tv, int32_t slot)
 {
 	if (ed->mt_state[slot][ABS_MT_TRACKING_ID - ABS_MT_FIRST] >= 0) {
 		put_event(ed, tv, EV_ABS, ABS_MT_SLOT, slot);
@@ -229,7 +229,7 @@ disable_mt_slot(
 }
 
 void
-get_clock_values(struct event_plus_times *ev)
+get_clock_values(struct event_times *ev)
 {
 	struct timespec mono_ts;
 	clock_gettime(CLOCK_MONOTONIC, &mono_ts); // XXX
