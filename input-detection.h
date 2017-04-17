@@ -1,9 +1,10 @@
 #ifndef INPUT_DETECTION_H_
 #define INPUT_DETECTION_H_
 
+#include <stdbool.h>
 #include <stdio.h>
 
-#include "evdevfbsd.h"
+#include <dev/evdev/input.h>
 
 #define BITS_PER_LONG (sizeof(unsigned long) * 8)
 #define NBITS(x) ((((x)-1) / BITS_PER_LONG) + 1)
