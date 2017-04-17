@@ -314,6 +314,17 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 		return CUSE_ERR_INVALID;
 	}
 
+	void *iowint_data = NULL;
+	if (cmd == EVIOCGRAB || cmd == EVIOCREVOKE) {
+		int arg;
+		int ret;
+		if ((ret = cuse_copy_in(peer_data, &arg, sizeof(arg))) != 0) {
+			return ret;
+		}
+		iowint_data = (void *)(intptr_t)arg;
+		fprintf(stderr, "iowint_data: %p\n", iowint_data);
+	}
+
 	switch (cmd) {
 	case EVIOCGID: {
 		// printf("got ioctl EVIOCGID\n");
@@ -325,8 +336,8 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 		return cuse_copy_out(&version, peer_data, sizeof(version));
 	}
 	case EVIOCGRAB: {
-		// fprintf(stderr, "GRAB: %lx %p\n", cmd, peer_data);
-		if (peer_data) {
+		// fprintf(stderr, "GRAB: %lx %p\n", cmd, iowint_data);
+		if (iowint_data) {
 			if (ed->exclusive_client != NULL) {
 				return CUSE_ERR_BUSY;
 			} else {
@@ -344,8 +355,8 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 	}
 	case EVIOCREVOKE: {
 #ifdef CUSE_ERR_NO_DEVICE
-		// fprintf(stderr, "REVOKE: %lx %p\n", cmd, peer_data);
-		if (peer_data) {
+		// fprintf(stderr, "REVOKE: %lx %p\n", cmd, iowint_data);
+		if (iowint_data) {
 			return CUSE_ERR_INVALID;
 		} else {
 			client_state->revoked = true;
