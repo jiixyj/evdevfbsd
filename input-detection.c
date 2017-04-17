@@ -326,6 +326,35 @@ input_id(struct input_id_input *input, struct input_id_output *output)
 	}
 }
 
+int
+fill_input_id_input(int fd, struct input_id_input *input)
+{
+
+	memset(input, '\0', sizeof(*input));
+
+	if (ioctl(fd, EVIOCGBIT(0, sizeof(input->bitmask_ev)),
+	        input->bitmask_ev) == -1 ||
+	    ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(input->bitmask_key)),
+	        input->bitmask_key) == -1 ||
+	    ioctl(fd, EVIOCGBIT(EV_REL, sizeof(input->bitmask_rel)),
+	        input->bitmask_rel) == -1 ||
+	    ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(input->bitmask_abs)),
+	        input->bitmask_abs) == -1 ||
+	    ioctl(fd, EVIOCGPROP(sizeof(input->bitmask_props)),
+	        input->bitmask_props) == -1) {
+		return -1;
+	}
+
+	if (has_abs_coord(input)) {
+		if (ioctl(fd, EVIOCGABS(ABS_X), &input->xabsinfo) == -1 ||
+		    ioctl(fd, EVIOCGABS(ABS_Y), &input->yabsinfo) == -1) {
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
 #ifdef STANDALONE
 
 int
@@ -336,33 +365,15 @@ main(int argc, char **argv)
 	}
 
 	struct input_id_input input;
-	memset(&input, '\0', sizeof(input));
 
 	int fd = open(argv[1], O_RDONLY | O_CLOEXEC);
 	if (fd == -1) {
 		return 1;
 	}
 
-	if (ioctl(fd, EVIOCGBIT(0, sizeof(input.bitmask_ev)),
-	        input.bitmask_ev) == -1 ||
-	    ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(input.bitmask_key)),
-	        input.bitmask_key) == -1 ||
-	    ioctl(fd, EVIOCGBIT(EV_REL, sizeof(input.bitmask_rel)),
-	        input.bitmask_rel) == -1 ||
-	    ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(input.bitmask_abs)),
-	        input.bitmask_abs) == -1 ||
-	    ioctl(fd, EVIOCGPROP(sizeof(input.bitmask_props)),
-	        input.bitmask_props) == -1) {
+	if (fill_input_id_input(fd, &input) == -1) {
 		fprintf(stderr, "error getting device info\n");
 		return 1;
-	}
-
-	if (has_abs_coord(&input)) {
-		if (ioctl(fd, EVIOCGABS(ABS_X), &input.xabsinfo) == -1 ||
-		    ioctl(fd, EVIOCGABS(ABS_Y), &input.yabsinfo) == -1) {
-			fprintf(stderr, "error getting device info\n");
-			return 1;
-		}
 	}
 
 	struct input_id_output output;

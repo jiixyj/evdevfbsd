@@ -42,6 +42,7 @@ struct input_id_output {
 	int64_t height;
 };
 
+int fill_input_id_input(int fd, struct input_id_input *input);
 void input_id(struct input_id_input *input, struct input_id_output *output);
 void print_output(FILE *file, struct input_id_output *output);
 
