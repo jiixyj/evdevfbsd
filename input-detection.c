@@ -361,6 +361,7 @@ int
 main(int argc, char **argv)
 {
 	if (argc != 2) {
+		fprintf(stderr, "usage: %s <event device>\n", argv[0]);
 		return 1;
 	}
 
@@ -368,10 +369,12 @@ main(int argc, char **argv)
 
 	int fd = open(argv[1], O_RDONLY | O_CLOEXEC);
 	if (fd == -1) {
+		perror("open");
 		return 1;
 	}
 
 	if (fill_input_id_input(fd, &input) == -1) {
+		perror("ioctl");
 		fprintf(stderr, "error getting device info\n");
 		return 1;
 	}
