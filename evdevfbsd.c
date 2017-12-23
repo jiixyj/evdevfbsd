@@ -309,9 +309,10 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 	switch (cmd) {
 	case TIOCFLUSH:
 	case TIOCGETA:
-	case FIONBIO:
 		// ignore these for now
 		return CUSE_ERR_INVALID;
+	case FIONBIO:
+		return 0;
 	}
 
 	void *iowint_data = NULL;
