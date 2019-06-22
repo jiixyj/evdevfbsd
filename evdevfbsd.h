@@ -56,6 +56,7 @@ struct event_device {
 
 	struct input_id iid;
 	char const *device_name;
+	char phys_name[32];
 	char cuse_dev_name[32];
 	uint64_t event_bits[256];
 	uint64_t rel_bits[256];

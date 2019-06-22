@@ -405,12 +405,13 @@ evdevfbsd_ioctl(struct cuse_dev *cdev, int fflags __unused, unsigned long cmd,
 		}
 	}
 	case EVIOCGPHYS(0):
-		// printf("got ioctl EVIOCGPHYS %lu\n", len);
-		// ENOENT would be better, but that is not supported by cuse
-		return 0;
+		// fprintf(stderr, "got ioctl EVIOCGPHYS %lu %s\n", len,
+		//     ed->phys_name);
+		return cuse_copy_out(ed->phys_name, peer_data,
+		    (int)MIN(strlen(ed->phys_name), len));
 	case EVIOCGUNIQ(0):
-		// printf("got ioctl EVIOCGUNIQ %lu\n", len);
-		// ENOENT would be better, but that is not supported by cuse
+		// fprintf(stderr, "got ioctl EVIOCGUNIQ %lu\n", len);
+		// ENOENT would be better, but this is not supported by cuse
 		return 0;
 	case EVIOCGBIT(EV_REL, 0): {
 		// printf("got ioctl EVIOCGBIT %lu\n", len);
@@ -563,22 +564,31 @@ event_device_init(struct event_device *ed)
 static int
 event_device_open(struct event_device *eds, size_t neds, char const *path)
 {
+	int num_devices, i;
+
 	if (neds < 2) {
 		return -1;
 	}
 
 	if (!strcmp(path, "/dev/bpsm0") || !strcmp(path, "/dev/psm0")) {
-		return psm_backend_init(eds);
+		num_devices = psm_backend_init(eds);
 	} else if (!strcmp(path, "/dev/sysmouse") ||
 	    !strncmp(path, "/dev/ums", 8)) {
-		return sysmouse_backend_init(eds, path);
+		num_devices = sysmouse_backend_init(eds, path);
 	} else if (!strcmp(path, "/dev/atkbd0")) {
-		return atkbd_backend_init(eds);
+		num_devices = atkbd_backend_init(eds);
 	} else if (!strncmp(path, "/dev/uhid", 9)) {
-		return uhid_backend_init(eds, path);
+		num_devices = uhid_backend_init(eds, path);
 	} else {
 		return -1;
 	}
+
+	for (i = 0; i < num_devices; ++i) {
+		snprintf(eds[i].phys_name, sizeof(eds[i].phys_name), "%s",
+		    path + 5);
+	}
+
+	return num_devices;
 }
 
 static void
